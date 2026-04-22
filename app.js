@@ -470,29 +470,84 @@ const audio = {
     }
   },
 
-  async playPause() {
+  // Zoom-out — played when a session pauses (tap or motion).
+  // A descending pitch glide with a filter closing down. Feels like
+  // the UI retreating: sound pulls back with it.
+  async playZoomOut() {
     await this.init();
     await this.resume();
     const now = this.ctx.currentTime;
-    const freqs = [220, 277];
-    freqs.forEach((freq, i) => {
+    const dur = 0.9;
+
+    // Two detuned sine voices — an octave apart, both sliding down
+    const voices = [
+      { fStart: 880, fEnd: 220, gain: 0.16 },
+      { fStart: 440, fEnd: 110, gain: 0.12 },
+    ];
+
+    voices.forEach((v) => {
       const osc = this.ctx.createOscillator();
-      const gain = this.ctx.createGain();
-      osc.type = 'sine';
-      osc.frequency.value = freq;
-      gain.gain.setValueAtTime(0, now);
-      gain.gain.linearRampToValueAtTime(0.12 - i * 0.03, now + 0.5);
-      gain.gain.linearRampToValueAtTime(0.12 - i * 0.03, now + 1.0);
-      gain.gain.linearRampToValueAtTime(0, now + 1.8);
+      const g = this.ctx.createGain();
       const filter = this.ctx.createBiquadFilter();
+
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(v.fStart, now);
+      osc.frequency.exponentialRampToValueAtTime(v.fEnd, now + dur);
+
       filter.type = 'lowpass';
-      filter.frequency.value = 600;
-      filter.Q.value = 0.5;
+      filter.frequency.setValueAtTime(3200, now);
+      filter.frequency.exponentialRampToValueAtTime(400, now + dur);
+      filter.Q.value = 0.7;
+
+      g.gain.setValueAtTime(0, now);
+      g.gain.linearRampToValueAtTime(v.gain, now + 0.04);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+
       osc.connect(filter);
-      filter.connect(gain);
-      gain.connect(this.masterGain);
+      filter.connect(g);
+      g.connect(this.masterGain);
       osc.start(now);
-      osc.stop(now + 2.0);
+      osc.stop(now + dur + 0.05);
+    });
+  },
+
+  // Zoom-in — played when a paused session resumes.
+  // Mirror of zoom-out: pitch rising, filter opening up, volume
+  // arriving rather than leaving. Feels like the UI returning.
+  async playZoomIn() {
+    await this.init();
+    await this.resume();
+    const now = this.ctx.currentTime;
+    const dur = 0.9;
+
+    const voices = [
+      { fStart: 220, fEnd: 880, gain: 0.16 },
+      { fStart: 110, fEnd: 440, gain: 0.12 },
+    ];
+
+    voices.forEach((v) => {
+      const osc = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      const filter = this.ctx.createBiquadFilter();
+
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(v.fStart, now);
+      osc.frequency.exponentialRampToValueAtTime(v.fEnd, now + dur);
+
+      filter.type = 'lowpass';
+      filter.frequency.setValueAtTime(400, now);
+      filter.frequency.exponentialRampToValueAtTime(3200, now + dur);
+      filter.Q.value = 0.7;
+
+      g.gain.setValueAtTime(0, now);
+      g.gain.linearRampToValueAtTime(v.gain, now + dur * 0.55);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + dur + 0.2);
+
+      osc.connect(filter);
+      filter.connect(g);
+      g.connect(this.masterGain);
+      osc.start(now);
+      osc.stop(now + dur + 0.25);
     });
   },
 
@@ -828,7 +883,7 @@ function enterPause(reason) {
   if (state.night) exitNight();
 
   setRunningUI(true, true);
-  audio.playPause();
+  audio.playZoomOut();
 
   // 3-min auto-end timeout
   state.pauseTimeoutId = setTimeout(() => {
@@ -853,6 +908,7 @@ function exitPause() {
   state.motionSince = null;
   state.focusLostSince = null;
   setRunningUI(true, false);
+  audio.playZoomIn();
 }
 
 // ============================================================
@@ -1290,17 +1346,18 @@ async function renderLog() {
       ratingHTML += '</div>';
     }
 
+    // Two-column layout: left = what + when + how loud, right = how long + how good
     html += `
       <div class="log-entry">
         <div class="log-mode-icon">${modeIconSVG(s.mode)}</div>
         <div class="log-meta">
           <span class="log-mode-name">${dot}${s.mode}</span>
           <span class="log-time">${timeOfDay(s.startedAt)}</span>
-          ${ratingHTML}
+          ${dbLabel}
         </div>
         <div class="log-duration ${isPartial ? 'partial' : ''}">
           <span>${fmtDuration(s.silentSeconds)}</span>
-          ${dbLabel}
+          ${ratingHTML}
         </div>
       </div>`;
   });
