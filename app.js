@@ -66,10 +66,12 @@ const CONFIG = {
 // ============================================================
 const SETTINGS_KEY = 'silence.settings.v1';
 const DEFAULT_SETTINGS = {
-  soundPack: 'cosmos',  // 'cosmos' | 'bell' | 'pulse' | 'off'
-  haptics:   'on',      // 'on' | 'off'
+  soundPack:  'cosmos',  // 'cosmos' | 'bell' | 'pulse' | 'off'
+  haptics:    'on',      // 'on' | 'off'
+  voiceNotes: 'ask',     // 'on' | 'ask' | 'off'  (Infinity mode only)
 };
 const SOUND_PACKS = ['cosmos', 'bell', 'pulse', 'off'];
+const VOICE_NOTES_MODES = ['on', 'ask', 'off'];
 
 const settings = {
   _data: null,
@@ -82,8 +84,9 @@ const settings = {
         const parsed = JSON.parse(raw);
         // Validate and merge with defaults so we never crash on bad data
         this._data = {
-          soundPack: SOUND_PACKS.includes(parsed.soundPack) ? parsed.soundPack : DEFAULT_SETTINGS.soundPack,
-          haptics:   parsed.haptics === 'off' ? 'off' : 'on',
+          soundPack:  SOUND_PACKS.includes(parsed.soundPack) ? parsed.soundPack : DEFAULT_SETTINGS.soundPack,
+          haptics:    parsed.haptics === 'off' ? 'off' : 'on',
+          voiceNotes: VOICE_NOTES_MODES.includes(parsed.voiceNotes) ? parsed.voiceNotes : DEFAULT_SETTINGS.voiceNotes,
         };
         return this._data;
       }
@@ -219,6 +222,10 @@ const state = {
   wakeLock: null,
   sensingFrame: null,
   currentSessionId: null,  // id of the session just completed, for rating update
+
+  // Voice notes (v0.9 UI-only; STT arrives in v1.0)
+  voiceNotesEnabled: false,  // true = transcribe during this session
+  voiceNotesText:    '',     // appended-to by STT in v1.0; stays '' in v0.9
 };
 
 // ============================================================
@@ -270,6 +277,12 @@ const dom = {
   soundPackChips:    $('soundPackChips'),
   hapticsToggle:     $('hapticsToggle'),
   hapticsHint:       $('hapticsHint'),
+
+  voiceNotesChips:   $('voiceNotesChips'),
+  vnConfirmOverlay:  $('vnConfirmOverlay'),
+  vnYesSession:      $('vnYesSession'),
+  vnAlwaysOn:        $('vnAlwaysOn'),
+  vnNotThisTime:     $('vnNotThisTime'),
 };
 
 // ============================================================
@@ -281,6 +294,22 @@ function fmtTime(seconds) {
   const s = Math.floor(seconds % 60);
   return `${m}:${String(s).padStart(2, '0')}`;
 }
+
+// Strict HTML-escape for user-captured text (voice notes). We build log
+// entry markup via template strings, so raw transcript text must be escaped
+// before it hits innerHTML. Covers the five characters that matter.
+function escapeHTML(str) {
+  if (str == null) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+// Notebook glyph used in the log-entry voice notes badge.
+const NOTEBOOK_SVG_INLINE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4.5A1.5 1.5 0 0 1 6.5 3H18a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6.5A1.5 1.5 0 0 1 5 19.5v-15z"/><path d="M9 7h7M9 11h7M9 15h4"/></svg>';
 
 function fmtDuration(seconds) {
   if (seconds < 60) return `${Math.floor(seconds)}s`;
@@ -1466,8 +1495,62 @@ function sensingTick() {
 // ============================================================
 // 17. Session lifecycle
 // ============================================================
+// ============================================================
+// 17b. Voice notes — confirmation flow (Infinity mode only)
+// ============================================================
+// Resolves to true (transcribe) or false (don't).
+// Called from startSession() before Infinity runs. Non-Infinity modes
+// skip this entirely.
+function maybeAskVoiceNotes() {
+  return new Promise((resolve) => {
+    const pref = settings.get('voiceNotes');
+    if (pref === 'on')  return resolve(true);
+    if (pref === 'off') return resolve(false);
+
+    // 'ask' — show overlay
+    if (!dom.vnConfirmOverlay) return resolve(false);
+    dom.vnConfirmOverlay.hidden = false;
+
+    const cleanup = () => {
+      dom.vnConfirmOverlay.hidden = true;
+      dom.vnYesSession.removeEventListener('click', onYes);
+      dom.vnAlwaysOn.removeEventListener('click', onAlways);
+      dom.vnNotThisTime.removeEventListener('click', onNo);
+    };
+    const onYes = () => {
+      haptics.tap();
+      cleanup();
+      resolve(true);
+    };
+    const onAlways = () => {
+      haptics.tap();
+      settings.set('voiceNotes', 'on');
+      applySettingsUI();
+      cleanup();
+      resolve(true);
+    };
+    const onNo = () => {
+      haptics.tap();
+      cleanup();
+      resolve(false);
+    };
+
+    dom.vnYesSession.addEventListener('click', onYes);
+    dom.vnAlwaysOn.addEventListener('click', onAlways);
+    dom.vnNotThisTime.addEventListener('click', onNo);
+  });
+}
+
 async function startSession() {
   if (state.running) return;
+
+  // Voice notes decision — Infinity only. Runs before mic/motion so the
+  // user can back out without us having grabbed sensors yet.
+  state.voiceNotesEnabled = false;
+  state.voiceNotesText    = '';
+  if (state.mode === 'infinity') {
+    state.voiceNotesEnabled = await maybeAskVoiceNotes();
+  }
 
   if (!state.micEnabled)    await startMic();
   if (!state.motionEnabled) await startMotion();
@@ -1533,6 +1616,12 @@ async function completeSession(naturalFinish = false, reason = 'manual') {
     rating: null,   // set later when user taps a star on the summary modal
   };
 
+  // Attach voice notes transcript only when present. v0.9 never writes
+  // non-empty text (no STT yet), so this is a no-op until v1.0.
+  if (state.voiceNotesText && state.voiceNotesText.trim()) {
+    session.voiceNotes = state.voiceNotesText.trim();
+  }
+
   try {
     const id = await db.add(session);
     session.id = id;
@@ -1580,6 +1669,10 @@ function commitSessionOnUnload() {
     peakDb: peakDb,
     rating: null,
   };
+
+  if (state.voiceNotesText && state.voiceNotesText.trim()) {
+    session.voiceNotes = state.voiceNotesText.trim();
+  }
 
   // Fire-and-forget save (browser may kill us before it completes; that's fine)
   try {
@@ -1754,6 +1847,21 @@ async function renderLog() {
       ratingHTML += '</div>';
     }
 
+    // Voice notes badge — only when session has non-empty transcript.
+    // Uses session id for unique panel reference (data-vn-id).
+    let vnBadge = '';
+    let vnPanel = '';
+    if (s.voiceNotes && s.id != null) {
+      vnBadge = `<button type="button" class="log-vn-badge" data-vn-toggle="${s.id}" aria-expanded="false" aria-controls="vn-panel-${s.id}">${NOTEBOOK_SVG_INLINE}<span>Notes</span></button>`;
+      vnPanel = `
+        <div class="log-vn-panel" id="vn-panel-${s.id}" data-vn-panel="${s.id}" hidden>
+          <p class="log-vn-text">${escapeHTML(s.voiceNotes)}</p>
+          <div class="log-vn-actions">
+            <button type="button" class="log-vn-copy" data-vn-copy="${s.id}">Copy</button>
+          </div>
+        </div>`;
+    }
+
     // Two-column layout: left = what + when + how loud, right = how long + how good
     html += `
       <div class="log-entry">
@@ -1762,12 +1870,13 @@ async function renderLog() {
           <span class="log-mode-name">${dot}${s.mode}</span>
           <span class="log-time">${timeOfDay(s.startedAt)}</span>
           ${dbLabel}
+          ${vnBadge}
         </div>
         <div class="log-duration ${isPartial ? 'partial' : ''}">
           <span>${fmtDuration(s.silentSeconds)}</span>
           ${ratingHTML}
         </div>
-      </div>`;
+      </div>${vnPanel}`;
   });
   dom.logList.innerHTML = html;
 }
@@ -1780,11 +1889,21 @@ async function renderLog() {
 function applySettingsUI() {
   const pack    = settings.get('soundPack');
   const haptOn  = settings.get('haptics') === 'on';
+  const vnMode  = settings.get('voiceNotes');
 
   // Sound pack chips — mark the current one as selected
   if (dom.soundPackChips) {
     dom.soundPackChips.querySelectorAll('.settings-chip').forEach((chip) => {
       const isSelected = chip.dataset.pack === pack;
+      chip.classList.toggle('selected', isSelected);
+      chip.setAttribute('aria-checked', String(isSelected));
+    });
+  }
+
+  // Voice notes chips — Always / Ask / Never
+  if (dom.voiceNotesChips) {
+    dom.voiceNotesChips.querySelectorAll('.settings-chip').forEach((chip) => {
+      const isSelected = chip.dataset.vn === vnMode;
       chip.classList.toggle('selected', isSelected);
       chip.setAttribute('aria-checked', String(isSelected));
     });
@@ -1958,6 +2077,73 @@ function wire() {
       applySettingsUI();
       // If they just turned it ON, demonstrate. If OFF, no preview.
       if (next === 'on') haptics.tap();
+    });
+  }
+
+  // ----- Settings: voice notes chips (Always / Ask / Never)
+  if (dom.voiceNotesChips) {
+    dom.voiceNotesChips.addEventListener('click', (e) => {
+      const chip = e.target.closest('.settings-chip');
+      if (!chip) return;
+      const mode = chip.dataset.vn;
+      if (!VOICE_NOTES_MODES.includes(mode)) return;
+      settings.set('voiceNotes', mode);
+      applySettingsUI();
+      haptics.tap();
+    });
+  }
+
+  // ----- Log list: voice notes expand/collapse + copy
+  if (dom.logList) {
+    dom.logList.addEventListener('click', (e) => {
+      const toggle = e.target.closest('[data-vn-toggle]');
+      const copy   = e.target.closest('[data-vn-copy]');
+
+      if (toggle) {
+        const id = toggle.getAttribute('data-vn-toggle');
+        const panel = dom.logList.querySelector(`[data-vn-panel="${id}"]`);
+        if (!panel) return;
+        const isOpen = !panel.hidden;
+        panel.hidden = isOpen;
+        toggle.classList.toggle('expanded', !isOpen);
+        toggle.setAttribute('aria-expanded', String(!isOpen));
+        haptics.tap();
+        return;
+      }
+
+      if (copy) {
+        const id = copy.getAttribute('data-vn-copy');
+        const panel = dom.logList.querySelector(`[data-vn-panel="${id}"]`);
+        const textEl = panel && panel.querySelector('.log-vn-text');
+        if (!textEl) return;
+        const text = textEl.textContent || '';
+        const showCopied = () => {
+          copy.classList.add('copied');
+          const original = copy.textContent;
+          copy.textContent = 'Copied';
+          setTimeout(() => {
+            copy.classList.remove('copied');
+            copy.textContent = original;
+          }, 1400);
+        };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(showCopied).catch(() => {
+            // Fallback for older WebViews
+            try {
+              const ta = document.createElement('textarea');
+              ta.value = text;
+              ta.style.position = 'fixed';
+              ta.style.opacity = '0';
+              document.body.appendChild(ta);
+              ta.select();
+              document.execCommand('copy');
+              document.body.removeChild(ta);
+              showCopied();
+            } catch (_) {}
+          });
+        }
+        haptics.tap();
+      }
     });
   }
 }
