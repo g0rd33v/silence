@@ -229,7 +229,42 @@
 
       <p class="summary-note">dB values are relative, not calibrated to a reference.</p>
 
-      <button class="primary-btn" id="summaryClose">Done</button>
+      <div class="rating-wrap">
+        <p class="rating-prompt" id="ratingPrompt">How did it feel?</p>
+        <div class="rating-stars" id="ratingStars" role="radiogroup" aria-label="Rate this session">
+          <button class="rating-star" data-value="1" aria-label="1 star">
+            <svg viewBox="0 0 24 24" width="32" height="32" aria-hidden="true">
+              <path d="M12 2.5l2.9 6.6 7.1 0.7-5.4 4.8 1.6 7-6.2-3.7-6.2 3.7 1.6-7-5.4-4.8 7.1-0.7z"
+                fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+            </svg>
+          </button>
+          <button class="rating-star" data-value="2" aria-label="2 stars">
+            <svg viewBox="0 0 24 24" width="32" height="32" aria-hidden="true">
+              <path d="M12 2.5l2.9 6.6 7.1 0.7-5.4 4.8 1.6 7-6.2-3.7-6.2 3.7 1.6-7-5.4-4.8 7.1-0.7z"
+                fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+            </svg>
+          </button>
+          <button class="rating-star" data-value="3" aria-label="3 stars">
+            <svg viewBox="0 0 24 24" width="32" height="32" aria-hidden="true">
+              <path d="M12 2.5l2.9 6.6 7.1 0.7-5.4 4.8 1.6 7-6.2-3.7-6.2 3.7 1.6-7-5.4-4.8 7.1-0.7z"
+                fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+            </svg>
+          </button>
+          <button class="rating-star" data-value="4" aria-label="4 stars">
+            <svg viewBox="0 0 24 24" width="32" height="32" aria-hidden="true">
+              <path d="M12 2.5l2.9 6.6 7.1 0.7-5.4 4.8 1.6 7-6.2-3.7-6.2 3.7 1.6-7-5.4-4.8 7.1-0.7z"
+                fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+            </svg>
+          </button>
+          <button class="rating-star" data-value="5" aria-label="5 stars">
+            <svg viewBox="0 0 24 24" width="32" height="32" aria-hidden="true">
+              <path d="M12 2.5l2.9 6.6 7.1 0.7-5.4 4.8 1.6 7-6.2-3.7-6.2 3.7 1.6-7-5.4-4.8 7.1-0.7z"
+                fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+            </svg>
+          </button>
+        </div>
+        <button class="ghost-btn rating-skip" id="ratingSkip">Skip</button>
+      </div>
     </div>
   </div>
 

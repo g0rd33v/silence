@@ -24,7 +24,7 @@ const CONFIG = {
 
   INFINITY_CAP_SECONDS:   60 * 60, // Infinity sessions end at 1 hour
 
-  NIGHT_THRESHOLD_MS:     30000,
+  NIGHT_THRESHOLD_MS:     10000,  // 10s of verified silence → enter night
   NIGHT_EXIT_FADE_MS:     1200,
 
   LOG_DAYS:               10,
@@ -78,6 +78,7 @@ const state = {
 
   wakeLock: null,
   sensingFrame: null,
+  currentSessionId: null,  // id of the session just completed, for rating update
 };
 
 // ============================================================
@@ -122,7 +123,9 @@ const dom = {
   summaryInterrupted:$('summaryInterrupted'),
   summaryAvgDb:      $('summaryAvgDb'),
   summaryPeakDb:     $('summaryPeakDb'),
-  summaryClose:      $('summaryClose'),
+  ratingPrompt:      $('ratingPrompt'),
+  ratingStars:       $('ratingStars'),
+  ratingSkip:        $('ratingSkip'),
 
   toast:          $('toast'),
   toastTitle:     $('toastTitle'),
@@ -263,37 +266,208 @@ const audio = {
     await this.init();
     await this.resume();
     const now = this.ctx.currentTime;
-    const reverb = this.makeReverb();
-    const notes = [
-      [1760, 0.00], [2217, 0.08], [2637, 0.16], [3136, 0.28],
-      [3520, 0.42], [2637, 0.58], [1760, 0.72],
+
+    // Pipe-organ-inspired swell. Stacked low fundamentals with slow attack
+    // and long release, plus a quiet high shimmer on top. Cinematic,
+    // ceremonial — weight rather than sparkle.
+    //
+    // Root chord: C2 (65.41), G2 (98.00), C3 (130.81) — open fifth + octave.
+    // Harmonics per voice add organ character.
+    const voices = [
+      { f: 65.41,  gain: 0.30, harm: [1, 2, 3, 4] }, // C2
+      { f: 98.00,  gain: 0.22, harm: [1, 2, 3] },    // G2
+      { f: 130.81, gain: 0.26, harm: [1, 2, 3] },    // C3
     ];
-    notes.forEach(([freq, delay]) => {
-      const osc = this.ctx.createOscillator();
-      const gain = this.ctx.createGain();
-      osc.type = 'sine';
-      osc.frequency.value = freq;
-      const det = this.ctx.createOscillator();
-      const detGain = this.ctx.createGain();
-      det.type = 'sine';
-      det.frequency.value = freq * 2.0009;
-      detGain.gain.value = 0.0;
-      det.connect(detGain);
-      gain.gain.setValueAtTime(0, now + delay);
-      gain.gain.linearRampToValueAtTime(0.18, now + delay + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.0001, now + delay + 1.4);
-      detGain.gain.setValueAtTime(0, now + delay);
-      detGain.gain.linearRampToValueAtTime(0.04, now + delay + 0.04);
-      detGain.gain.exponentialRampToValueAtTime(0.0001, now + delay + 0.9);
-      osc.connect(gain);
-      gain.connect(this.masterGain);
-      gain.connect(reverb.input);
-      detGain.connect(this.masterGain);
-      osc.start(now + delay);
-      osc.stop(now + delay + 1.5);
-      det.start(now + delay);
-      det.stop(now + delay + 1.0);
+
+    const attack  = 1.2;   // slow swell in
+    const sustain = 1.8;   // hold
+    const release = 1.8;   // slow fade
+    const total   = attack + sustain + release;
+
+    voices.forEach((v) => {
+      const gainNode = this.ctx.createGain();
+      gainNode.gain.setValueAtTime(0, now);
+      gainNode.gain.linearRampToValueAtTime(v.gain, now + attack);
+      gainNode.gain.linearRampToValueAtTime(v.gain * 0.75, now + attack + sustain);
+      gainNode.gain.exponentialRampToValueAtTime(0.0001, now + total);
+
+      // Lowpass to soften the organ stack so it feels warm, not thin
+      const filter = this.ctx.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.setValueAtTime(800, now);
+      filter.frequency.linearRampToValueAtTime(2400, now + attack);
+      filter.Q.value = 0.3;
+
+      gainNode.connect(filter);
+      filter.connect(this.masterGain);
+
+      // Build organ-style harmonic stack for this voice
+      v.harm.forEach((h, idx) => {
+        const osc = this.ctx.createOscillator();
+        osc.type = idx === 0 ? 'sine' : idx === 1 ? 'triangle' : 'sine';
+        osc.frequency.value = v.f * h;
+        const voiceGain = this.ctx.createGain();
+        // Each successive harmonic quieter
+        voiceGain.gain.value = 1 / (h * h * 0.6);
+        osc.connect(voiceGain);
+        voiceGain.connect(gainNode);
+        osc.start(now);
+        osc.stop(now + total + 0.1);
+      });
     });
+
+    // High airy whisper on top — like the shimmer in Interstellar's
+    // "Cornfield Chase" or "No Time For Caution", kept very quiet.
+    const shimmerFreqs = [1046, 1568, 2093]; // C6, G6, C7
+    shimmerFreqs.forEach((f, i) => {
+      const osc = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = f;
+      const shimmerStart = now + attack * 0.4 + i * 0.15;
+      g.gain.setValueAtTime(0, shimmerStart);
+      g.gain.linearRampToValueAtTime(0.05, shimmerStart + 0.6);
+      g.gain.exponentialRampToValueAtTime(0.0001, shimmerStart + 2.2);
+      osc.connect(g);
+      g.connect(this.masterGain);
+      osc.start(shimmerStart);
+      osc.stop(shimmerStart + 2.3);
+    });
+  },
+
+  // Rating sounds — distinct emotional register per star count.
+  // 1 = dull low thud, 5 = bright crystalline glass.
+  async playRating(n) {
+    await this.init();
+    await this.resume();
+    const now = this.ctx.currentTime;
+
+    if (n === 1) {
+      // Low muffled thud — disappointed
+      const osc = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      const filter = this.ctx.createBiquadFilter();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(180, now);
+      osc.frequency.exponentialRampToValueAtTime(110, now + 0.5);
+      filter.type = 'lowpass';
+      filter.frequency.value = 280;
+      filter.Q.value = 2;
+      g.gain.setValueAtTime(0, now);
+      g.gain.linearRampToValueAtTime(0.30, now + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + 0.55);
+      osc.connect(filter);
+      filter.connect(g);
+      g.connect(this.masterGain);
+      osc.start(now);
+      osc.stop(now + 0.6);
+      return;
+    }
+
+    if (n === 2) {
+      // Soft flat low tone
+      const freqs = [196, 294]; // G3 + D4 (perfect fifth, slightly dull)
+      freqs.forEach((f, i) => {
+        const osc = this.ctx.createOscillator();
+        const g = this.ctx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.value = f;
+        const delay = i * 0.03;
+        g.gain.setValueAtTime(0, now + delay);
+        g.gain.linearRampToValueAtTime(0.13, now + delay + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001, now + delay + 0.7);
+        osc.connect(g);
+        g.connect(this.masterGain);
+        osc.start(now + delay);
+        osc.stop(now + delay + 0.75);
+      });
+      return;
+    }
+
+    if (n === 3) {
+      // Neutral mid chime — no emotion, just an acknowledgment
+      const freqs = [440, 554]; // A4 + C#5 (major third)
+      freqs.forEach((f, i) => {
+        const osc = this.ctx.createOscillator();
+        const g = this.ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = f;
+        const delay = i * 0.04;
+        g.gain.setValueAtTime(0, now + delay);
+        g.gain.linearRampToValueAtTime(0.15, now + delay + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001, now + delay + 0.85);
+        osc.connect(g);
+        g.connect(this.masterGain);
+        osc.start(now + delay);
+        osc.stop(now + delay + 0.9);
+      });
+      return;
+    }
+
+    if (n === 4) {
+      // Warm major triad — pleasant
+      const reverb = this.makeReverb();
+      const freqs = [523, 659, 784]; // C5, E5, G5
+      freqs.forEach((f, i) => {
+        const osc = this.ctx.createOscillator();
+        const g = this.ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = f;
+        const delay = i * 0.05;
+        g.gain.setValueAtTime(0, now + delay);
+        g.gain.linearRampToValueAtTime(0.16, now + delay + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001, now + delay + 1.1);
+        osc.connect(g);
+        g.connect(this.masterGain);
+        g.connect(reverb.input);
+        osc.start(now + delay);
+        osc.stop(now + delay + 1.2);
+      });
+      return;
+    }
+
+    if (n === 5) {
+      // Bright crystalline glass — uplifting, harmonic rich
+      const reverb = this.makeReverb();
+      // C major arpeggio rising + high harmonic shimmer
+      const notes = [
+        [1046, 0.00], // C6
+        [1318, 0.06], // E6
+        [1568, 0.12], // G6
+        [2093, 0.20], // C7
+        [2637, 0.28], // E7
+        [3136, 0.36], // G7 — final bell
+      ];
+      notes.forEach(([f, delay]) => {
+        // Fundamental
+        const osc = this.ctx.createOscillator();
+        const g = this.ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = f;
+        g.gain.setValueAtTime(0, now + delay);
+        g.gain.linearRampToValueAtTime(0.18, now + delay + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001, now + delay + 1.6);
+        osc.connect(g);
+        g.connect(this.masterGain);
+        g.connect(reverb.input);
+        osc.start(now + delay);
+        osc.stop(now + delay + 1.7);
+
+        // Harmonic shimmer — 2.0009 ratio gives a glass-like beat
+        const harm = this.ctx.createOscillator();
+        const hg = this.ctx.createGain();
+        harm.type = 'sine';
+        harm.frequency.value = f * 2.0009;
+        hg.gain.setValueAtTime(0, now + delay);
+        hg.gain.linearRampToValueAtTime(0.05, now + delay + 0.04);
+        hg.gain.exponentialRampToValueAtTime(0.0001, now + delay + 1.0);
+        harm.connect(hg);
+        hg.connect(this.masterGain);
+        harm.start(now + delay);
+        harm.stop(now + delay + 1.1);
+      });
+      return;
+    }
   },
 
   async playPause() {
@@ -451,9 +625,27 @@ const db = {
     const database = await this.open();
     return new Promise((resolve, reject) => {
       const tx = database.transaction('sessions', 'readwrite');
-      tx.objectStore('sessions').add(session);
+      const req = tx.objectStore('sessions').add(session);
+      req.onsuccess = () => resolve(req.result); // id
+      req.onerror = () => reject(req.error);
+    });
+  },
+  async update(session) {
+    const database = await this.open();
+    return new Promise((resolve, reject) => {
+      const tx = database.transaction('sessions', 'readwrite');
+      tx.objectStore('sessions').put(session);
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
+    });
+  },
+  async getById(id) {
+    const database = await this.open();
+    return new Promise((resolve, reject) => {
+      const tx = database.transaction('sessions', 'readonly');
+      const req = tx.objectStore('sessions').get(id);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
     });
   },
   async getSince(ts) {
@@ -861,9 +1053,14 @@ async function completeSession(naturalFinish = false, reason = 'manual') {
     pausedTotalSeconds: Math.round(state.pausedTotalMs / 1000),
     avgDb: avgDb,
     peakDb: peakDb,
+    rating: null,   // set later when user taps a star on the summary modal
   };
 
-  try { await db.add(session); } catch (e) { console.warn('[silence] save failed:', e); }
+  try {
+    const id = await db.add(session);
+    session.id = id;
+    state.currentSessionId = id;
+  } catch (e) { console.warn('[silence] save failed:', e); }
 
   setRunningUI(false);
   selectMode(state.mode);
@@ -899,10 +1096,11 @@ function commitSessionOnUnload() {
     completed: false,
     endReason: 'closed',
     interrupted: true,
-    interruptionCount: state.interruptionCount + 1, // close counts as one more
+    interruptionCount: state.interruptionCount + 1,
     pausedTotalSeconds: Math.round(state.pausedTotalMs / 1000),
     avgDb: avgDb,
     peakDb: peakDb,
+    rating: null,
   };
 
   // Fire-and-forget save (browser may kill us before it completes; that's fine)
@@ -939,7 +1137,45 @@ function showSummary(session) {
   dom.summaryAvgDb.textContent  = session.avgDb  != null ? `${session.avgDb} dB`  : '—';
   dom.summaryPeakDb.textContent = session.peakDb != null ? `${session.peakDb} dB` : '—';
 
+  // Reset rating UI — fresh state for each session
+  dom.ratingStars.classList.remove('submitted');
+  dom.ratingStars.querySelectorAll('.rating-star').forEach(s => s.classList.remove('lit'));
+  dom.ratingPrompt.textContent = 'How did it feel?';
+  dom.ratingSkip.style.display = '';
+
   dom.summaryOverlay.hidden = false;
+}
+
+// Apply rating to the just-completed session and close the summary.
+async function submitRating(n) {
+  // Lit all stars up to n; mark the group as submitted
+  dom.ratingStars.classList.add('submitted');
+  const stars = dom.ratingStars.querySelectorAll('.rating-star');
+  stars.forEach((s, i) => {
+    s.classList.toggle('lit', i < n);
+  });
+
+  // Play the rating sound
+  audio.playRating(n);
+
+  // Acknowledge + update the stored session
+  dom.ratingPrompt.textContent = 'Saved.';
+  dom.ratingSkip.style.display = 'none';
+
+  if (state.currentSessionId != null) {
+    try {
+      const existing = await db.getById(state.currentSessionId);
+      if (existing) {
+        existing.rating = n;
+        await db.update(existing);
+      }
+    } catch (e) { console.warn('[silence] rating save failed:', e); }
+  }
+
+  // Close after a beat so the user hears the sound + sees the confirmation
+  setTimeout(() => {
+    dom.summaryOverlay.hidden = true;
+  }, 900);
 }
 
 // ============================================================
@@ -983,10 +1219,31 @@ async function renderLog() {
   const todayStart = startOfDay();
   dom.logChart.innerHTML = '';
 
+  // Small filled-star SVG for mini displays (chart + log entries)
+  const miniStarSVG = '<svg viewBox="0 0 24 24" width="100%" height="100%" aria-hidden="true"><path d="M12 2.5l2.9 6.6 7.1 0.7-5.4 4.8 1.6 7-6.2-3.7-6.2 3.7 1.6-7-5.4-4.8 7.1-0.7z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>';
+
   days.forEach((d) => {
     const col = document.createElement('div');
     col.className = 'bar-col';
     col.dataset.ts = d.ts;
+
+    // Daily average rating — stars above the bar
+    // Only count sessions that actually have a rating (not null)
+    const rated = d.sessions.filter(s => s.rating != null);
+    let avgRating = 0;
+    if (rated.length > 0) {
+      avgRating = Math.round(rated.reduce((sum, s) => sum + s.rating, 0) / rated.length);
+    }
+    const ratingRow = document.createElement('div');
+    ratingRow.className = 'bar-rating';
+    for (let i = 1; i <= 5; i++) {
+      const st = document.createElement('span');
+      st.className = 'bar-rating-star' + (i <= avgRating ? ' lit' : '');
+      st.innerHTML = miniStarSVG;
+      ratingRow.appendChild(st);
+    }
+    col.appendChild(ratingRow);
+
     const bar = document.createElement('div');
     bar.className = 'bar';
     const fill = document.createElement('div');
@@ -1022,12 +1279,24 @@ async function renderLog() {
     const isPartial = !s.completed;
     const dot = s.interrupted ? '<span class="log-interrupted-dot" title="Interrupted"></span>' : '';
     const dbLabel = (s.avgDb != null) ? `<span class="log-db">${s.avgDb} dB</span>` : '';
+
+    // Inline rating display — 5 mini-stars, filled up to s.rating
+    let ratingHTML = '';
+    if (s.rating != null) {
+      ratingHTML = '<div class="log-entry-rating">';
+      for (let i = 1; i <= 5; i++) {
+        ratingHTML += `<span class="log-entry-rating-star${i <= s.rating ? ' lit' : ''}">${miniStarSVG}</span>`;
+      }
+      ratingHTML += '</div>';
+    }
+
     html += `
       <div class="log-entry">
         <div class="log-mode-icon">${modeIconSVG(s.mode)}</div>
         <div class="log-meta">
           <span class="log-mode-name">${dot}${s.mode}</span>
           <span class="log-time">${timeOfDay(s.startedAt)}</span>
+          ${ratingHTML}
         </div>
         <div class="log-duration ${isPartial ? 'partial' : ''}">
           <span>${fmtDuration(s.silentSeconds)}</span>
@@ -1076,8 +1345,33 @@ function wire() {
   });
   dom.logClose.addEventListener('click', () => { dom.logOverlay.hidden = true; });
 
-  // Summary close
-  dom.summaryClose.addEventListener('click', () => { dom.summaryOverlay.hidden = true; });
+  // Rating — each star click plays its own sound and persists the rating.
+  dom.ratingStars.addEventListener('click', (e) => {
+    const btn = e.target.closest('.rating-star');
+    if (!btn) return;
+    if (dom.ratingStars.classList.contains('submitted')) return;
+    const n = parseInt(btn.dataset.value, 10);
+    if (!n || n < 1 || n > 5) return;
+    submitRating(n);
+  });
+  // Hover preview — light up stars up to the hovered one
+  dom.ratingStars.addEventListener('mouseover', (e) => {
+    if (dom.ratingStars.classList.contains('submitted')) return;
+    const btn = e.target.closest('.rating-star');
+    if (!btn) return;
+    const n = parseInt(btn.dataset.value, 10);
+    dom.ratingStars.querySelectorAll('.rating-star').forEach((s, i) => {
+      s.classList.toggle('lit', i < n);
+    });
+  });
+  dom.ratingStars.addEventListener('mouseleave', () => {
+    if (dom.ratingStars.classList.contains('submitted')) return;
+    dom.ratingStars.querySelectorAll('.rating-star').forEach(s => s.classList.remove('lit'));
+  });
+  // Skip — just close without rating
+  dom.ratingSkip.addEventListener('click', () => {
+    dom.summaryOverlay.hidden = true;
+  });
 
   // Tap interactions — v0.5:
   //   Running + not paused: any tap pauses (except STOP button)

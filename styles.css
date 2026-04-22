@@ -680,6 +680,25 @@ body.night-active .app {
   padding-top: 4px;
 }
 
+/* Stars above the bar chart — daily average rating */
+.bar-rating {
+  display: flex;
+  gap: 1px;
+  height: 10px;
+  align-items: center;
+  justify-content: center;
+  min-height: 10px;
+}
+
+.bar-rating-star {
+  width: 8px;
+  height: 8px;
+  color: var(--c-5);
+  display: inline-flex;
+}
+.bar-rating-star.lit { color: var(--c-1); }
+.bar-rating-star.lit svg path { fill: currentColor; }
+
 .bar {
   width: 100%;
   min-height: 2px;
@@ -828,6 +847,25 @@ body.night-active .app {
   text-transform: uppercase;
 }
 
+.log-entry-rating {
+  display: inline-flex;
+  gap: 1px;
+  margin-top: 2px;
+  align-items: center;
+}
+.log-entry-rating-star {
+  width: 9px;
+  height: 9px;
+  color: var(--c-5);
+  display: inline-flex;
+}
+.log-entry-rating-star.lit {
+  color: var(--c-2);
+}
+.log-entry-rating-star.lit svg path {
+  fill: currentColor;
+}
+
 .log-interrupted-dot {
   display: inline-block;
   width: 5px;
@@ -935,6 +973,64 @@ body.night-active .app {
   letter-spacing: 0.005em;
   margin-bottom: 18px;
   line-height: 1.4;
+}
+
+/* ============================================================
+   Star rating (on session summary)
+   ============================================================ */
+.rating-wrap {
+  margin-top: 8px;
+  text-align: center;
+}
+
+.rating-prompt {
+  font-size: 13px;
+  color: var(--c-2);
+  letter-spacing: 0.005em;
+  margin-bottom: 14px;
+}
+
+.rating-stars {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.rating-star {
+  background: transparent;
+  border: none;
+  padding: 6px;
+  margin: 0;
+  cursor: pointer;
+  color: var(--c-4);
+  transition: color 0.15s var(--ease), transform 0.12s var(--ease);
+  -webkit-tap-highlight-color: transparent;
+  border-radius: 8px;
+}
+
+.rating-star:active { transform: scale(0.94); }
+
+/* Fill state — applied by JS on hover index and after submit */
+.rating-star.lit {
+  color: var(--c-1);
+}
+.rating-star.lit svg path {
+  fill: currentColor;
+}
+
+/* Submitted state — stars no longer clickable */
+.rating-stars.submitted .rating-star {
+  cursor: default;
+  pointer-events: none;
+  transform: scale(1);
+}
+
+.rating-skip {
+  padding-top: 4px;
+  padding-bottom: 12px;
+  font-size: 12px;
+  letter-spacing: 0.01em;
 }
 
 /* ============================================================
