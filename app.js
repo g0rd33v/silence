@@ -108,29 +108,72 @@ const settings = {
 };
 
 // ============================================================
-// 1c. Haptics — Web Vibration API, fails silently when unavailable
+// 1c. Haptics — Telegram WebApp HapticFeedback (works on iOS), then
+//     Web Vibration API (Android Chrome), then silent no-op.
 // ============================================================
 //
-// iOS Safari does not expose navigator.vibrate. Android Chrome and
-// Telegram WebApps do. We wrap navigator.vibrate so calls are no-ops
-// when haptics are disabled in settings or when the API is missing —
-// callers never need to check.
+// iOS Safari does NOT expose navigator.vibrate. iOS Chrome doesn't either
+// (it's just a Safari skin on iOS). The only way to deliver real haptics
+// on iPhone is through Telegram's WebApp.HapticFeedback bridge, which
+// talks to the native iOS Taptic Engine.
+//
+// Strategy, in priority order:
+//   1. Telegram WebApp.HapticFeedback (best — works iOS + Android in TG)
+//   2. navigator.vibrate (Android Chrome / Firefox / Edge outside TG)
+//   3. Silent no-op (iOS Safari, desktop, anywhere unsupported)
+//
+// Desktop returns true from navigator.vibrate but has no motor — that's
+// expected and harmless. We just don't claim "haptics work" without a
+// way to actually verify. The settings toggle is still a real switch.
 const haptics = {
-  available() {
-    return typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function';
+  // Telegram bridge if present. ready() just signals we've initialized;
+  // safe to call multiple times.
+  _tg() {
+    const tg = (typeof window !== 'undefined') && window.Telegram && window.Telegram.WebApp;
+    if (tg && tg.HapticFeedback) {
+      try { tg.ready(); } catch (_) {}
+      return tg.HapticFeedback;
+    }
+    return null;
   },
 
-  fire(pattern) {
+  // For diagnostics — what backend will we actually use right now?
+  // Returns 'telegram' | 'vibrate' | 'none'.
+  backend() {
+    if (this._tg()) return 'telegram';
+    if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') return 'vibrate';
+    return 'none';
+  },
+
+  // Internal dispatcher — every named pattern routes through here.
+  // 'kind' is one of: 'tap', 'short', 'medium', 'success'.
+  fire(kind) {
     if (settings.get('haptics') !== 'on') return;
-    if (!this.available()) return;
-    try { navigator.vibrate(pattern); } catch (_) {}
+    const tg = this._tg();
+    if (tg) {
+      try {
+        if (kind === 'success')      tg.notificationOccurred('success');
+        else if (kind === 'tap')     tg.selectionChanged();
+        else if (kind === 'short')   tg.impactOccurred('light');
+        else if (kind === 'medium')  tg.impactOccurred('medium');
+      } catch (_) {}
+      return;
+    }
+    if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+      const pattern =
+        kind === 'success' ? [40, 80, 40] :
+        kind === 'tap'     ? 15 :
+        kind === 'short'   ? 20 :
+        kind === 'medium'  ? 40 : 0;
+      try { navigator.vibrate(pattern); } catch (_) {}
+    }
   },
 
-  // Named patterns — all callers use these, never fire raw numbers
-  tap()       { this.fire(15); },               // mode select, star tap
-  short()     { this.fire(20); },               // pause acknowledgment
-  medium()    { this.fire(40); },               // session start, resume
-  success()   { this.fire([40, 80, 40]); },     // session complete (natural finish)
+  // Named callsites — never fire raw values from app code.
+  tap()       { this.fire('tap'); },
+  short()     { this.fire('short'); },
+  medium()    { this.fire('medium'); },
+  success()   { this.fire('success'); },
 };
 
 // ============================================================
@@ -226,6 +269,7 @@ const dom = {
 
   soundPackChips:    $('soundPackChips'),
   hapticsToggle:     $('hapticsToggle'),
+  hapticsHint:       $('hapticsHint'),
 };
 
 // ============================================================
@@ -1749,6 +1793,19 @@ function applySettingsUI() {
   // Haptics toggle — set aria-checked, CSS handles visual state
   if (dom.hapticsToggle) {
     dom.hapticsToggle.setAttribute('aria-checked', String(haptOn));
+  }
+
+  // Hint — show which haptic backend will actually fire, so users know
+  // why they may not feel anything (e.g. desktop, or iOS Safari outside Telegram).
+  if (dom.hapticsHint) {
+    if (!haptOn) {
+      dom.hapticsHint.textContent = 'Off';
+    } else {
+      const backend = haptics.backend();
+      if (backend === 'telegram')      dom.hapticsHint.textContent = 'Native (Telegram)';
+      else if (backend === 'vibrate')  dom.hapticsHint.textContent = 'Web Vibration API';
+      else                              dom.hapticsHint.textContent = 'Not supported on this device';
+    }
   }
 }
 

@@ -1004,6 +1004,15 @@ body.night-active .app {
   background: var(--c-1);
 }
 
+.settings-hint {
+  margin: -4px 0 0;
+  text-align: right;
+  font-size: 10px;
+  color: var(--c-5);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 .log-signature {
   font-size: 11px;
   color: var(--c-5);
