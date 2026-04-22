@@ -1,20 +1,38 @@
 /* ============================================================
-   Silence · v0.4 app.js
+   Silence · app.js
    ------------------------------------------------------------
-   What changed since v0.3:
-   - Noise no longer pauses the session. It's recorded (avg + peak dB).
-   - Motion pauses. Taps pause. Tab-backgrounded pauses.
-   - 3-minute pause timeout -> auto-end.
-   - Page close (visibilitychange 'hidden' + pagehide) -> save session.
-   - Session summary modal replaces the thin toast: duration,
-     interrupted y/n, avg dB, peak dB.
-   - Log entries show dB tag and interrupted indicator.
+   Single-file, no-build-step application logic.
+   Organized in clearly marked sections; scan the section banners
+   to navigate.
+
+   Sections, in order:
+   1.  Config                — tunable constants
+   2.  State                 — single global state object
+   3.  DOM refs              — cached element lookups
+   4.  SVG assets            — icon path constants (single source)
+   5.  Utilities             — formatters, date math, dB conversion
+   6.  Audio synthesis       — all sounds, generated on demand
+   7.  Starfield             — Steady Night canvas animation
+   8.  IndexedDB             — session persistence
+   9.  Sensing: microphone   — getUserMedia + RMS-based dB
+   10. Sensing: motion       — devicemotion accelerometer deltas
+   11. Wake lock             — screen-on while running
+   12. Permissions flow      — first-run overlay
+   13. Mode selection        — before / after / unwind / sleep / infinity
+   14. Steady Night          — UI fade-to-starfield transition
+   15. Pause state machine   — enterPause / exitPause
+   16. Timer + sensing loop  — the tick function
+   17. Session lifecycle     — start / complete / close
+   18. Summary modal         — post-session with rating
+   19. Log rendering         — stats panel (bar chart + entries)
+   20. Wire                 — event handlers
+   21. Boot                 — init sequence
    ============================================================ */
 
 'use strict';
 
 // ============================================================
-// Config
+// 1. Config
 // ============================================================
 const CONFIG = {
   MOTION_THRESHOLD:       0.6,
@@ -34,10 +52,17 @@ const CONFIG = {
   // (quiet room ~30–40, speech ~55–70). Relative, not calibrated.
   DB_OFFSET:              85,
   DB_FLOOR:               -70,     // clamp silence below this dBFS
+
+  // Dial ring circumference = 2π × 86 (the SVG circle's radius).
+  // Cached because stroke-dashoffset animation reads it every frame.
+  RING_CIRCUMFERENCE:     540.354,
+
+  // Global output gain for all synthesized audio — one knob for volume
+  AUDIO_MASTER_GAIN:      0.22,
 };
 
 // ============================================================
-// State
+// 2. State
 // ============================================================
 const state = {
   mode: 'unwind',
@@ -64,7 +89,7 @@ const state = {
   pausedAt: null,            // ms timestamp when paused
   pauseReason: null,         // 'tap' | 'motion' | 'focus'
   pauseTimeoutId: null,
-  pausedTotalMs: 0,          // cumulative paused duration (not used for summary yet, available)
+  pausedTotalMs: 0,          // cumulative paused duration in ms, saved with session
   interruptionCount: 0,
 
   // Noise accumulators
@@ -82,7 +107,7 @@ const state = {
 };
 
 // ============================================================
-// DOM
+// 3. DOM refs
 // ============================================================
 const $ = (id) => document.getElementById(id);
 const dom = {
@@ -126,14 +151,10 @@ const dom = {
   ratingPrompt:      $('ratingPrompt'),
   ratingStars:       $('ratingStars'),
   ratingSkip:        $('ratingSkip'),
-
-  toast:          $('toast'),
-  toastTitle:     $('toastTitle'),
-  toastSub:       $('toastSub'),
 };
 
 // ============================================================
-// Utilities
+// 5. Utilities
 // ============================================================
 function fmtTime(seconds) {
   if (!isFinite(seconds) || seconds < 0) return '∞';
@@ -209,6 +230,9 @@ function levelToDb(level) {
   return clamped + CONFIG.DB_OFFSET;
 }
 
+// ============================================================
+// 4. SVG assets (single source, populated into empty HTML slots at boot)
+// ============================================================
 function modeIconSVG(mode, size = 20) {
   const common = `viewBox="0 0 32 32" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"`;
   switch (mode) {
@@ -227,8 +251,47 @@ function modeIconSVG(mode, size = 20) {
   }
 }
 
+// ----- Single source for the star icon (used in rating UI, bar chart, log entries)
+const STAR_PATH = 'M12 2.5l2.9 6.6 7.1 0.7-5.4 4.8 1.6 7-6.2-3.7-6.2 3.7 1.6-7-5.4-4.8 7.1-0.7z';
+
+function starSVG(size, strokeWidth = 1.4) {
+  return `<svg viewBox="0 0 24 24" width="${size}" height="${size}" aria-hidden="true"><path d="${STAR_PATH}" fill="none" stroke="currentColor" stroke-width="${strokeWidth}" stroke-linejoin="round"/></svg>`;
+}
+
+// 100%-sized version for the small inline star spans (bar chart, log entries)
+const STAR_SVG_INLINE = `<svg viewBox="0 0 24 24" width="100%" height="100%" aria-hidden="true"><path d="${STAR_PATH}" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>`;
+
+// Small glyphs used in the mode row (Sleep lock, Infinity circle)
+const LOCK_SVG = `<svg viewBox="0 0 14 18" width="12" height="14" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="8" width="10" height="8" rx="1.5"/><path d="M4.5 8V5a2.5 2.5 0 0 1 5 0v3"/></svg>`;
+const CIRCLE_SVG = `<svg viewBox="0 0 14 14" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1" aria-hidden="true"><circle cx="7" cy="7" r="5.5"/></svg>`;
+
+// Inject static icons once at boot, using the single source above. The
+// HTML ships with empty slots — JS fills them. Keeps copy-paste out of
+// the markup.
+function populateStaticIcons() {
+  // Mode buttons: each .mode has an empty .mode-icon that we fill.
+  document.querySelectorAll('.mode').forEach((btn) => {
+    const mode = btn.dataset.mode;
+    const slot = btn.querySelector('.mode-icon');
+    if (slot) slot.innerHTML = modeIconSVG(mode, 28);
+  });
+
+  // Sleep lock + Infinity circle glyphs in the mode-time row
+  document.querySelectorAll('[data-icon="lock"]').forEach((el) => {
+    el.innerHTML = LOCK_SVG;
+  });
+  document.querySelectorAll('[data-icon="circle"]').forEach((el) => {
+    el.innerHTML = CIRCLE_SVG;
+  });
+
+  // Five rating stars in the summary modal
+  document.querySelectorAll('#ratingStars .rating-star').forEach((btn) => {
+    btn.innerHTML = starSVG(32);
+  });
+}
+
 // ============================================================
-// Audio synthesis (unchanged from v0.3)
+// 6. Audio synthesis — all sounds generated on demand, no assets
 // ============================================================
 const audio = {
   ctx: null,
@@ -238,7 +301,7 @@ const audio = {
     if (this.ctx) return;
     this.ctx = new (window.AudioContext || window.webkitAudioContext)();
     this.masterGain = this.ctx.createGain();
-    this.masterGain.gain.value = 0.22;
+    this.masterGain.gain.value = CONFIG.AUDIO_MASTER_GAIN;
     this.masterGain.connect(this.ctx.destination);
   },
 
@@ -575,7 +638,7 @@ const audio = {
 };
 
 // ============================================================
-// Starfield (unchanged)
+// 7. Starfield — Steady Night canvas animation
 // ============================================================
 const stars = {
   canvas: null,
@@ -657,7 +720,7 @@ const stars = {
 };
 
 // ============================================================
-// IndexedDB
+// 8. IndexedDB — session persistence
 // ============================================================
 const db = {
   _db: null,
@@ -717,7 +780,7 @@ const db = {
 };
 
 // ============================================================
-// Sensing: mic
+// 9. Sensing: microphone
 // ============================================================
 async function startMic() {
   if (state.micEnabled) return true;
@@ -755,7 +818,7 @@ function readMicLevel() {
 }
 
 // ============================================================
-// Sensing: motion
+// 10. Sensing: motion
 // ============================================================
 let lastAccel = { x: 0, y: 0, z: 0 };
 
@@ -788,7 +851,7 @@ async function startMotion() {
 }
 
 // ============================================================
-// Wake lock
+// 11. Wake lock
 // ============================================================
 async function requestWakeLock() {
   if (!('wakeLock' in navigator)) return;
@@ -806,7 +869,7 @@ function releaseWakeLock() {
 }
 
 // ============================================================
-// Permissions
+// 12. Permissions flow
 // ============================================================
 function needsPermissionFlow() {
   return localStorage.getItem('silence.permSeen') !== '1';
@@ -834,7 +897,7 @@ async function showPermissionOverlay() {
 }
 
 // ============================================================
-// Mode selection
+// 13. Mode selection
 // ============================================================
 function selectMode(mode) {
   state.mode = mode;
@@ -851,7 +914,7 @@ function selectMode(mode) {
 }
 
 // ============================================================
-// Steady Night
+// 14. Steady Night transitions
 // ============================================================
 function enterNight() {
   if (state.night) return;
@@ -870,7 +933,7 @@ function exitNight() {
 }
 
 // ============================================================
-// Pause state machine — NEW in v0.4
+// 15. Pause state machine
 // ============================================================
 function enterPause(reason) {
   if (!state.running || state.paused) return;
@@ -912,10 +975,10 @@ function exitPause() {
 }
 
 // ============================================================
-// Timer + sensing loop
+// 16. Timer + sensing loop
 // ============================================================
 function updateRing() {
-  const C = 540.354;
+  const C = CONFIG.RING_CIRCUMFERENCE;
   let progress = 0;
   if (state.duration > 0) {
     progress = Math.min(state.elapsed / state.duration, 1);
@@ -983,7 +1046,9 @@ function sensingTick() {
     state.dbSum += db;
     state.dbSamples += 1;
     if (db > state.dbPeak) state.dbPeak = db;
-  }  // Motion — pauses if threshold sustained past grace
+  }
+
+  // Motion — pauses if threshold sustained past grace
   if (state.motionEnabled) {
     const tooMoving = state.currentMotion > CONFIG.MOTION_THRESHOLD;
     if (tooMoving) {
@@ -1044,7 +1109,7 @@ function sensingTick() {
 }
 
 // ============================================================
-// Session lifecycle
+// 17. Session lifecycle
 // ============================================================
 async function startSession() {
   if (state.running) return;
@@ -1168,7 +1233,7 @@ function commitSessionOnUnload() {
 }
 
 // ============================================================
-// Summary modal
+// 18. Summary modal
 // ============================================================
 function showSummary(session) {
   dom.summaryModeIcon.innerHTML = modeIconSVG(session.mode, 24);
@@ -1235,19 +1300,7 @@ async function submitRating(n) {
 }
 
 // ============================================================
-// Toast (for lightweight messages)
-// ============================================================
-let toastTimer = null;
-function showToast(title, sub) {
-  dom.toastTitle.textContent = title;
-  dom.toastSub.textContent = sub;
-  dom.toast.hidden = false;
-  if (toastTimer) clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { dom.toast.hidden = true; }, 3500);
-}
-
-// ============================================================
-// Log rendering
+// 19. Log rendering
 // ============================================================
 async function renderLog() {
   const sinceTs = daysAgo(CONFIG.LOG_DAYS - 1);
@@ -1275,9 +1328,6 @@ async function renderLog() {
   const todayStart = startOfDay();
   dom.logChart.innerHTML = '';
 
-  // Small filled-star SVG for mini displays (chart + log entries)
-  const miniStarSVG = '<svg viewBox="0 0 24 24" width="100%" height="100%" aria-hidden="true"><path d="M12 2.5l2.9 6.6 7.1 0.7-5.4 4.8 1.6 7-6.2-3.7-6.2 3.7 1.6-7-5.4-4.8 7.1-0.7z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>';
-
   days.forEach((d) => {
     const col = document.createElement('div');
     col.className = 'bar-col';
@@ -1295,7 +1345,7 @@ async function renderLog() {
     for (let i = 1; i <= 5; i++) {
       const st = document.createElement('span');
       st.className = 'bar-rating-star' + (i <= avgRating ? ' lit' : '');
-      st.innerHTML = miniStarSVG;
+      st.innerHTML = STAR_SVG_INLINE;
       ratingRow.appendChild(st);
     }
     col.appendChild(ratingRow);
@@ -1341,7 +1391,7 @@ async function renderLog() {
     if (s.rating != null) {
       ratingHTML = '<div class="log-entry-rating">';
       for (let i = 1; i <= 5; i++) {
-        ratingHTML += `<span class="log-entry-rating-star${i <= s.rating ? ' lit' : ''}">${miniStarSVG}</span>`;
+        ratingHTML += `<span class="log-entry-rating-star${i <= s.rating ? ' lit' : ''}">${STAR_SVG_INLINE}</span>`;
       }
       ratingHTML += '</div>';
     }
@@ -1365,7 +1415,7 @@ async function renderLog() {
 }
 
 // ============================================================
-// Wire up
+// 20. Wire — event handlers
 // ============================================================
 function wire() {
   // Modes — only selectable when not running
@@ -1492,9 +1542,10 @@ function wire() {
 }
 
 // ============================================================
-// Boot
+// 21. Boot
 // ============================================================
 async function boot() {
+  populateStaticIcons();
   wire();
   selectMode('unwind');
   stars.init();
