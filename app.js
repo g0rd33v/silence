@@ -1,13 +1,14 @@
 /* ============================================================
-   Silence · v0.3 app.js
+   Silence · v0.4 app.js
    ------------------------------------------------------------
-   - Sensing engine (mic + motion + visibility)
-   - Timer state machine with grace periods
-   - Audio: START chime (magic dust), PAUSE tone (come back),
-     FINISH chime — all synthesized, no assets
-   - Steady Night: after 30s continuous silence, UI fades to
-     starfield. Any disturbance exits.
-   - IndexedDB history, bar chart + session log
+   What changed since v0.3:
+   - Noise no longer pauses the session. It's recorded (avg + peak dB).
+   - Motion pauses. Taps pause. Tab-backgrounded pauses.
+   - 3-minute pause timeout -> auto-end.
+   - Page close (visibilitychange 'hidden' + pagehide) -> save session.
+   - Session summary modal replaces the thin toast: duration,
+     interrupted y/n, avg dB, peak dB.
+   - Log entries show dB tag and interrupted indicator.
    ============================================================ */
 
 'use strict';
@@ -16,15 +17,21 @@
 // Config
 // ============================================================
 const CONFIG = {
-  SILENCE_THRESHOLD:  0.08,
-  MOTION_THRESHOLD:   0.6,
-  NOISE_GRACE_MS:     1500,
-  MOTION_GRACE_MS:    800,
+  MOTION_THRESHOLD:       0.6,
+  MOTION_GRACE_MS:        800,
+  FOCUS_GRACE_MS:         500,     // tab can be blipped briefly
+  PAUSE_TIMEOUT_MS:       3 * 60 * 1000, // 3 min -> auto-end
 
-  NIGHT_THRESHOLD_MS: 30000,  // 30s of silence → enter night
-  NIGHT_EXIT_FADE_MS: 1200,
+  NIGHT_THRESHOLD_MS:     30000,
+  NIGHT_EXIT_FADE_MS:     1200,
 
-  LOG_DAYS:           10,
+  LOG_DAYS:               10,
+
+  // dB conversion tuning — we shift dBFS up by this offset so the
+  // number reads in a familiar range (ambient room ~35–45, speech ~55–65).
+  // It's a relative scale, NOT an absolute SPL reading.
+  DB_OFFSET:              90,
+  DB_FLOOR:               -60,     // below this dBFS we clamp
 };
 
 // ============================================================
@@ -37,9 +44,10 @@ const state = {
   running: false,
   paused: false,
   startedAt: null,
-  elapsed: 0,
+  elapsed: 0,                // silent seconds accumulated
   lastTickAt: null,
 
+  // Sensing
   micEnabled: false,
   motionEnabled: false,
   audioCtx: null,
@@ -47,11 +55,23 @@ const state = {
   micStream: null,
   currentLevel: 0,
   currentMotion: 0,
-  noiseSince: null,
   motionSince: null,
+  focusLostSince: null,
+
+  // Pause tracking
+  pausedAt: null,            // ms timestamp when paused
+  pauseReason: null,         // 'tap' | 'motion' | 'focus'
+  pauseTimeoutId: null,
+  pausedTotalMs: 0,          // cumulative paused duration (not used for summary yet, available)
+  interruptionCount: 0,
+
+  // Noise accumulators
+  dbSum: 0,                  // sum of per-tick dB readings
+  dbSamples: 0,              // count of readings
+  dbPeak: -Infinity,
 
   // Steady night
-  silenceContinuousSince: null,  // ms timestamp when unbroken silence started
+  silenceContinuousSince: null,
   night: false,
 
   wakeLock: null,
@@ -89,8 +109,18 @@ const dom = {
   logList:        $('logList'),
   logSub:         $('logSub'),
   totalWeek:      $('totalWeek'),
-  totalSessions: $('totalSessions'),
+  totalSessions:  $('totalSessions'),
   longestSession: $('longestSession'),
+
+  summaryOverlay:    $('summaryOverlay'),
+  summaryModeIcon:   $('summaryModeIcon'),
+  summaryTitle:      $('summaryTitle'),
+  summarySub:        $('summarySub'),
+  summaryDuration:   $('summaryDuration'),
+  summaryInterrupted:$('summaryInterrupted'),
+  summaryAvgDb:      $('summaryAvgDb'),
+  summaryPeakDb:     $('summaryPeakDb'),
+  summaryClose:      $('summaryClose'),
 
   toast:          $('toast'),
   toastTitle:     $('toastTitle'),
@@ -164,9 +194,18 @@ function timeOfDay(ts) {
   return `${h}:${String(m).padStart(2, '0')} ${ampm}`;
 }
 
-// Mode icon builders for log list (reuse same svg paths as mode buttons)
-function modeIconSVG(mode) {
-  const common = `viewBox="0 0 32 32" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"`;
+// Convert normalized audio level (0..1) to relative dB.
+// 0 -> returns DB_FLOOR (silence)
+// 1 -> returns ~90 dB
+function levelToDb(level) {
+  if (level <= 0) return CONFIG.DB_FLOOR + CONFIG.DB_OFFSET;
+  const dbfs = 20 * Math.log10(level);
+  const clamped = Math.max(CONFIG.DB_FLOOR, dbfs);
+  return clamped + CONFIG.DB_OFFSET;
+}
+
+function modeIconSVG(mode, size = 20) {
+  const common = `viewBox="0 0 32 32" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"`;
   switch (mode) {
     case 'before':
       return `<svg ${common}><path d="M10 18a6 6 0 0 1 12 0"/><line x1="16" y1="7" x2="16" y2="10"/><line x1="8" y1="10" x2="10" y2="12"/><line x1="22" y1="12" x2="24" y2="10"/><line x1="5" y1="18" x2="8" y2="18"/><line x1="24" y1="18" x2="27" y2="18"/><line x1="4" y1="22" x2="28" y2="22"/></svg>`;
@@ -184,7 +223,7 @@ function modeIconSVG(mode) {
 }
 
 // ============================================================
-// Audio — synthesized on demand, no assets
+// Audio synthesis (unchanged from v0.3)
 // ============================================================
 const audio = {
   ctx: null,
@@ -204,9 +243,7 @@ const audio = {
     }
   },
 
-  // Returns a simple reverb-ish chain
   makeReverb() {
-    // Simulated reverb via delay + feedback (ConvolverNode requires impulse asset)
     const delay = this.ctx.createDelay();
     delay.delayTime.value = 0.18;
     const feedback = this.ctx.createGain();
@@ -220,49 +257,36 @@ const audio = {
     return { input: delay, output: wet };
   },
 
-  // START: shimmering magic-dust arpeggio
   async playStart() {
     await this.init();
     await this.resume();
     const now = this.ctx.currentTime;
     const reverb = this.makeReverb();
-
-    // Bell-like harmonic stack: fundamental + partials, detuned slightly
     const notes = [
-      [1760, 0.00],  // A6
-      [2217, 0.08],  // C#7
-      [2637, 0.16],  // E7
-      [3136, 0.28],  // G7
-      [3520, 0.42],  // A7
-      [2637, 0.58],  // E7 again
-      [1760, 0.72],  // A6 again
+      [1760, 0.00], [2217, 0.08], [2637, 0.16], [3136, 0.28],
+      [3520, 0.42], [2637, 0.58], [1760, 0.72],
     ];
     notes.forEach(([freq, delay]) => {
       const osc = this.ctx.createOscillator();
       const gain = this.ctx.createGain();
       osc.type = 'sine';
       osc.frequency.value = freq;
-      // Slight detuned partial for shimmer
       const det = this.ctx.createOscillator();
       const detGain = this.ctx.createGain();
       det.type = 'sine';
       det.frequency.value = freq * 2.0009;
       detGain.gain.value = 0.0;
       det.connect(detGain);
-
       gain.gain.setValueAtTime(0, now + delay);
       gain.gain.linearRampToValueAtTime(0.18, now + delay + 0.02);
       gain.gain.exponentialRampToValueAtTime(0.0001, now + delay + 1.4);
-
       detGain.gain.setValueAtTime(0, now + delay);
       detGain.gain.linearRampToValueAtTime(0.04, now + delay + 0.04);
       detGain.gain.exponentialRampToValueAtTime(0.0001, now + delay + 0.9);
-
       osc.connect(gain);
       gain.connect(this.masterGain);
       gain.connect(reverb.input);
       detGain.connect(this.masterGain);
-
       osc.start(now + delay);
       osc.stop(now + delay + 1.5);
       det.start(now + delay);
@@ -270,63 +294,46 @@ const audio = {
     });
   },
 
-  // PAUSE: soft warm pad, gentle reminder
   async playPause() {
     await this.init();
     await this.resume();
     const now = this.ctx.currentTime;
-
-    // Two slightly detuned low sine waves fading in and out
-    const freqs = [220, 277];  // A3 + C#4, minor third for calm
+    const freqs = [220, 277];
     freqs.forEach((freq, i) => {
       const osc = this.ctx.createOscillator();
       const gain = this.ctx.createGain();
       osc.type = 'sine';
       osc.frequency.value = freq;
-
       gain.gain.setValueAtTime(0, now);
       gain.gain.linearRampToValueAtTime(0.12 - i * 0.03, now + 0.5);
       gain.gain.linearRampToValueAtTime(0.12 - i * 0.03, now + 1.0);
       gain.gain.linearRampToValueAtTime(0, now + 1.8);
-
-      // Gentle lowpass filter
       const filter = this.ctx.createBiquadFilter();
       filter.type = 'lowpass';
       filter.frequency.value = 600;
       filter.Q.value = 0.5;
-
       osc.connect(filter);
       filter.connect(gain);
       gain.connect(this.masterGain);
-
       osc.start(now);
       osc.stop(now + 2.0);
     });
   },
 
-  // FINISH: resolved bell, warm
   async playFinish() {
     await this.init();
     await this.resume();
     const now = this.ctx.currentTime;
     const reverb = this.makeReverb();
-
-    // Descending bell: E6, C6, A5
-    const notes = [
-      [1318, 0.00],
-      [1046, 0.25],
-      [ 880, 0.50],
-    ];
+    const notes = [[1318, 0.00], [1046, 0.25], [880, 0.50]];
     notes.forEach(([freq, delay]) => {
       const osc = this.ctx.createOscillator();
       const gain = this.ctx.createGain();
       osc.type = 'sine';
       osc.frequency.value = freq;
-
       gain.gain.setValueAtTime(0, now + delay);
       gain.gain.linearRampToValueAtTime(0.22, now + delay + 0.03);
       gain.gain.exponentialRampToValueAtTime(0.0001, now + delay + 2.2);
-
       osc.connect(gain);
       gain.connect(this.masterGain);
       gain.connect(reverb.input);
@@ -337,7 +344,7 @@ const audio = {
 };
 
 // ============================================================
-// Starfield for steady night
+// Starfield (unchanged)
 // ============================================================
 const stars = {
   canvas: null,
@@ -413,7 +420,6 @@ const stars = {
       this.ctx.arc(d.x, d.y, d.r, 0, Math.PI * 2);
       this.ctx.fillStyle = `rgba(255,255,255,${alpha})`;
       this.ctx.fill();
-      // Slight drift
       d.x += dt * 1.5 * (0.5 - (d.x / w));
     }
   }
@@ -429,9 +435,9 @@ const db = {
     return new Promise((resolve, reject) => {
       const req = indexedDB.open('silence', 1);
       req.onupgradeneeded = (e) => {
-        const db = e.target.result;
-        if (!db.objectStoreNames.contains('sessions')) {
-          const store = db.createObjectStore('sessions', { keyPath: 'id', autoIncrement: true });
+        const d = e.target.result;
+        if (!d.objectStoreNames.contains('sessions')) {
+          const store = d.createObjectStore('sessions', { keyPath: 'id', autoIncrement: true });
           store.createIndex('startedAt', 'startedAt');
         }
       };
@@ -546,7 +552,7 @@ function releaseWakeLock() {
 }
 
 // ============================================================
-// Permissions flow
+// Permissions
 // ============================================================
 function needsPermissionFlow() {
   return localStorage.getItem('silence.permSeen') !== '1';
@@ -591,7 +597,7 @@ function selectMode(mode) {
 }
 
 // ============================================================
-// Steady Night transitions
+// Steady Night
 // ============================================================
 function enterNight() {
   if (state.night) return;
@@ -606,15 +612,48 @@ function exitNight() {
   state.night = false;
   document.body.classList.remove('night-active');
   dom.night.classList.remove('active');
-  // Stop the starfield after fade completes
   setTimeout(() => { if (!state.night) stars.stop(); }, CONFIG.NIGHT_EXIT_FADE_MS);
 }
 
-// Any tap on the night layer also exits
-function setupNightTapExit() {
-  dom.night.addEventListener('click', () => {
-    if (state.night) exitNight();
-  });
+// ============================================================
+// Pause state machine — NEW in v0.4
+// ============================================================
+function enterPause(reason) {
+  if (!state.running || state.paused) return;
+  state.paused = true;
+  state.pausedAt = Date.now();
+  state.pauseReason = reason;
+  state.interruptionCount += 1;
+  state.silenceContinuousSince = null;
+
+  if (state.night) exitNight();
+
+  setRunningUI(true, true);
+  audio.playPause();
+
+  // 3-min auto-end timeout
+  state.pauseTimeoutId = setTimeout(() => {
+    if (state.paused && state.running) {
+      completeSession(false, 'pause-timeout');
+    }
+  }, CONFIG.PAUSE_TIMEOUT_MS);
+}
+
+function exitPause() {
+  if (!state.paused) return;
+  const now = Date.now();
+  state.pausedTotalMs += (now - state.pausedAt);
+  state.paused = false;
+  state.pausedAt = null;
+  state.pauseReason = null;
+  if (state.pauseTimeoutId) {
+    clearTimeout(state.pauseTimeoutId);
+    state.pauseTimeoutId = null;
+  }
+  state.silenceContinuousSince = now;
+  state.motionSince = null;
+  state.focusLostSince = null;
+  setRunningUI(true, false);
 }
 
 // ============================================================
@@ -652,57 +691,72 @@ function setRunningUI(running, paused = false) {
     dom.dialLabel.textContent = 'SILENCE';
   } else if (paused) {
     dom.dialLabel.textContent = 'PAUSED';
-    dom.statusText.textContent = pauseReason();
+    dom.statusText.textContent = pauseStatusText();
   } else {
     dom.dialLabel.textContent = 'SILENCE';
     dom.statusText.textContent = 'Listening for silence…';
   }
 }
 
-function pauseReason() {
-  if (state.noiseSince && Date.now() - state.noiseSince > CONFIG.NOISE_GRACE_MS)   return 'Paused · noise detected';
-  if (state.motionSince && Date.now() - state.motionSince > CONFIG.MOTION_GRACE_MS) return 'Paused · motion detected';
-  return 'Paused';
+function pauseStatusText() {
+  const reasonMap = {
+    'tap':    'Paused · you tapped the screen',
+    'motion': 'Paused · phone moved',
+    'focus':  'Paused · app in background',
+  };
+  const base = reasonMap[state.pauseReason] || 'Paused';
+  // Show countdown to auto-end
+  if (state.pausedAt) {
+    const left = Math.max(0, CONFIG.PAUSE_TIMEOUT_MS - (Date.now() - state.pausedAt));
+    const mins = Math.floor(left / 60000);
+    const secs = Math.floor((left % 60000) / 1000);
+    return `${base} · resume within ${mins}:${String(secs).padStart(2, '0')}`;
+  }
+  return base;
 }
 
 function sensingTick() {
   if (!state.running) return;
   const now = Date.now();
 
-  if (state.micEnabled) state.currentLevel = readMicLevel();
-
-  const tooLoud   = state.micEnabled    && state.currentLevel  > CONFIG.SILENCE_THRESHOLD;
-  const tooMoving = state.motionEnabled && state.currentMotion > CONFIG.MOTION_THRESHOLD;
-
-  if (tooLoud)   { if (!state.noiseSince)  state.noiseSince  = now; } else state.noiseSince  = null;
-  if (tooMoving) { if (!state.motionSince) state.motionSince = now; } else state.motionSince = null;
-
-  const noisePause  = state.noiseSince  && (now - state.noiseSince  > CONFIG.NOISE_GRACE_MS);
-  const motionPause = state.motionSince && (now - state.motionSince > CONFIG.MOTION_GRACE_MS);
-  const shouldPause = !!(noisePause || motionPause);
-
-  // Transition pause state
-  if (shouldPause && !state.paused) {
-    state.paused = true;
-    setRunningUI(true, true);
-    audio.playPause();
-    // Break steady night on pause (noise or motion)
-    if (state.night) exitNight();
-    state.silenceContinuousSince = null;
-  } else if (!shouldPause && state.paused) {
-    state.paused = false;
-    setRunningUI(true, false);
-    state.silenceContinuousSince = now;
+  // Mic — always sample when running, for dB recording. Never pauses.
+  if (state.micEnabled) {
+    state.currentLevel = readMicLevel();
+    const db = levelToDb(state.currentLevel);
+    state.dbSum += db;
+    state.dbSamples += 1;
+    if (db > state.dbPeak) state.dbPeak = db;
   }
 
-  // Accumulate elapsed silence
+  // Motion — pauses if threshold sustained past grace
+  if (state.motionEnabled) {
+    const tooMoving = state.currentMotion > CONFIG.MOTION_THRESHOLD;
+    if (tooMoving) {
+      if (!state.motionSince) state.motionSince = now;
+    } else {
+      state.motionSince = null;
+    }
+    const motionPause = state.motionSince && (now - state.motionSince > CONFIG.MOTION_GRACE_MS);
+    if (motionPause && !state.paused) enterPause('motion');
+  }
+
+  // Focus — pauses after grace (short blips for notifications don't count)
+  if (document.hidden) {
+    if (!state.focusLostSince) state.focusLostSince = now;
+    const focusPause = (now - state.focusLostSince) > CONFIG.FOCUS_GRACE_MS;
+    if (focusPause && !state.paused) enterPause('focus');
+  } else {
+    state.focusLostSince = null;
+  }
+
+  // Accumulate elapsed only when not paused
   if (!state.paused && state.lastTickAt) {
     const dt = (now - state.lastTickAt) / 1000;
     state.elapsed += dt;
   }
   state.lastTickAt = now;
 
-  // Track continuous silence for steady night
+  // Steady night tracking — only accrues while not paused
   if (!state.paused) {
     if (!state.silenceContinuousSince) state.silenceContinuousSince = now;
     const silentFor = now - state.silenceContinuousSince;
@@ -711,11 +765,16 @@ function sensingTick() {
     }
   }
 
+  // Keep paused-status countdown fresh
+  if (state.paused) {
+    dom.statusText.textContent = pauseStatusText();
+  }
+
   updateDialTime();
   updateRing();
 
   if (state.duration > 0 && state.elapsed >= state.duration) {
-    completeSession(true);
+    completeSession(true, 'complete');
     return;
   }
 
@@ -732,31 +791,43 @@ async function startSession() {
   if (!state.motionEnabled) await startMotion();
   await requestWakeLock();
 
+  // Reset all state
   state.running = true;
   state.paused  = false;
   state.startedAt = Date.now();
   state.elapsed = 0;
   state.lastTickAt = Date.now();
-  state.noiseSince = null;
   state.motionSince = null;
+  state.focusLostSince = null;
+  state.pausedAt = null;
+  state.pauseReason = null;
+  state.pausedTotalMs = 0;
+  state.interruptionCount = 0;
+  state.dbSum = 0;
+  state.dbSamples = 0;
+  state.dbPeak = -Infinity;
   state.silenceContinuousSince = Date.now();
 
-  // Dial pulse animation
   dom.dial.classList.add('starting');
   setTimeout(() => dom.dial.classList.remove('starting'), 2600);
-
-  // Play START chime — magic dust
   audio.playStart();
 
   setRunningUI(true);
   state.sensingFrame = requestAnimationFrame(sensingTick);
 }
 
-async function completeSession(naturalFinish = false) {
+async function completeSession(naturalFinish = false, reason = 'manual') {
   if (!state.running) return;
 
   if (state.sensingFrame) cancelAnimationFrame(state.sensingFrame);
   state.sensingFrame = null;
+  if (state.pauseTimeoutId) {
+    clearTimeout(state.pauseTimeoutId);
+    state.pauseTimeoutId = null;
+  }
+
+  const avgDb = state.dbSamples > 0 ? Math.round(state.dbSum / state.dbSamples) : null;
+  const peakDb = state.dbSamples > 0 && isFinite(state.dbPeak) ? Math.round(state.dbPeak) : null;
 
   const session = {
     startedAt: state.startedAt,
@@ -765,6 +836,12 @@ async function completeSession(naturalFinish = false) {
     targetSeconds: state.duration,
     silentSeconds: Math.floor(state.elapsed),
     completed: naturalFinish,
+    endReason: reason,                   // 'complete' | 'manual' | 'pause-timeout' | 'closed'
+    interrupted: state.interruptionCount > 0,
+    interruptionCount: state.interruptionCount,
+    pausedTotalSeconds: Math.round(state.pausedTotalMs / 1000),
+    avgDb: avgDb,
+    peakDb: peakDb,
   };
 
   try { await db.add(session); } catch (e) { console.warn('[silence] save failed:', e); }
@@ -774,22 +851,81 @@ async function completeSession(naturalFinish = false) {
   setRunningUI(false);
   selectMode(state.mode);
   releaseWakeLock();
-
   if (state.night) exitNight();
 
-  // Play FINISH chime for natural completion; skip for manual stop
   if (naturalFinish) audio.playFinish();
+
+  // Only show the summary if the page is still visible and this isn't a
+  // beforeunload save. Closed-window completes skip this.
+  if (reason !== 'closed') {
+    showSummary(session);
+  }
+}
+
+// A synchronous variant used in pagehide — best-effort, can't await
+function commitSessionOnUnload() {
+  if (!state.running) return;
+  // Clean up timers
+  if (state.sensingFrame) cancelAnimationFrame(state.sensingFrame);
+  if (state.pauseTimeoutId) clearTimeout(state.pauseTimeoutId);
+
+  const avgDb = state.dbSamples > 0 ? Math.round(state.dbSum / state.dbSamples) : null;
+  const peakDb = state.dbSamples > 0 && isFinite(state.dbPeak) ? Math.round(state.dbPeak) : null;
+
+  const session = {
+    startedAt: state.startedAt,
+    endedAt: Date.now(),
+    mode: state.mode,
+    targetSeconds: state.duration,
+    silentSeconds: Math.floor(state.elapsed),
+    completed: false,
+    endReason: 'closed',
+    interrupted: true,
+    interruptionCount: state.interruptionCount + 1, // close counts as one more
+    pausedTotalSeconds: Math.round(state.pausedTotalMs / 1000),
+    avgDb: avgDb,
+    peakDb: peakDb,
+  };
+
+  // Fire-and-forget save (browser may kill us before it completes; that's fine)
+  try {
+    db.add(session);
+  } catch (_) {}
+
+  state.running = false;
+}
+
+// ============================================================
+// Summary modal
+// ============================================================
+function showSummary(session) {
+  dom.summaryModeIcon.innerHTML = modeIconSVG(session.mode, 24);
 
   const mins = Math.floor(session.silentSeconds / 60);
   const secs = session.silentSeconds % 60;
   const phrasing = mins > 0
-    ? `${mins} minute${mins === 1 ? '' : 's'}${secs > 0 ? ` ${secs}s` : ''} of real silence`
+    ? `${mins} minute${mins === 1 ? '' : 's'}${secs > 0 ? ` ${secs}s` : ''} of silence`
     : `${secs} seconds of silence`;
-  showToast(naturalFinish ? 'Session complete' : 'Session saved', phrasing);
+
+  let title = 'Session complete';
+  if (session.endReason === 'manual')        title = 'Session saved';
+  if (session.endReason === 'pause-timeout') title = 'Session ended';
+
+  dom.summaryTitle.textContent = title;
+  dom.summarySub.textContent = phrasing;
+  dom.summaryDuration.textContent = fmtDuration(session.silentSeconds);
+
+  dom.summaryInterrupted.textContent = session.interrupted ? 'Yes' : 'No';
+  dom.summaryInterrupted.className = 's-value ' + (session.interrupted ? 'yes' : 'no');
+
+  dom.summaryAvgDb.textContent  = session.avgDb  != null ? `${session.avgDb} dB`  : '—';
+  dom.summaryPeakDb.textContent = session.peakDb != null ? `${session.peakDb} dB` : '—';
+
+  dom.summaryOverlay.hidden = false;
 }
 
 // ============================================================
-// Toast
+// Toast (for lightweight messages)
 // ============================================================
 let toastTimer = null;
 function showToast(title, sub) {
@@ -797,7 +933,7 @@ function showToast(title, sub) {
   dom.toastSub.textContent = sub;
   dom.toast.hidden = false;
   if (toastTimer) clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { dom.toast.hidden = true; }, 4000);
+  toastTimer = setTimeout(() => { dom.toast.hidden = true; }, 3500);
 }
 
 // ============================================================
@@ -807,7 +943,6 @@ async function renderLog() {
   const sinceTs = daysAgo(CONFIG.LOG_DAYS - 1);
   const sessions = await db.getSince(sinceTs);
 
-  // Build per-day buckets
   const days = [];
   for (let i = CONFIG.LOG_DAYS - 1; i >= 0; i--) {
     const dayStart = daysAgo(i);
@@ -817,7 +952,6 @@ async function renderLog() {
     days.push({ ts: dayStart, sessions: daySessions, total });
   }
 
-  // Totals for the 10-day window
   let totalSeconds = 0, longest = 0;
   sessions.forEach(s => {
     totalSeconds += s.silentSeconds;
@@ -827,7 +961,6 @@ async function renderLog() {
   dom.totalSessions.textContent = String(sessions.length);
   dom.longestSession.textContent = fmtTotal(longest);
 
-  // Chart
   const maxTotal = Math.max(...days.map(d => d.total), 60);
   const todayStart = startOfDay();
   dom.logChart.innerHTML = '';
@@ -836,60 +969,62 @@ async function renderLog() {
     const col = document.createElement('div');
     col.className = 'bar-col';
     col.dataset.ts = d.ts;
-
     const bar = document.createElement('div');
     bar.className = 'bar';
     const fill = document.createElement('div');
     fill.className = 'bar-fill';
     fill.style.height = ((d.total / maxTotal) * 100) + '%';
     bar.appendChild(fill);
-
     const label = document.createElement('div');
     label.className = 'bar-day' + (d.ts === todayStart ? ' today' : '');
     label.textContent = dayLabel(d.ts);
-
     col.appendChild(bar);
     col.appendChild(label);
     dom.logChart.appendChild(col);
   });
 
-  // Session list — reverse chrono, grouped by day
   const allDescending = [...sessions].sort((a, b) => b.startedAt - a.startedAt);
 
   if (allDescending.length === 0) {
     dom.logList.innerHTML = '<div class="log-empty">Your silence log will appear here.<br>Start a session to begin.</div>';
     dom.logSub.textContent = 'No sessions yet';
-  } else {
-    dom.logSub.textContent = `${sessions.length} session${sessions.length === 1 ? '' : 's'} · last ${CONFIG.LOG_DAYS} days`;
-
-    let html = '';
-    let lastDay = null;
-    allDescending.forEach(s => {
-      const dayKey = startOfDay(new Date(s.startedAt));
-      if (dayKey !== lastDay) {
-        html += `<div class="log-day">${fullDateLabel(s.startedAt)}</div>`;
-        lastDay = dayKey;
-      }
-      const isPartial = !s.completed;
-      html += `
-        <div class="log-entry">
-          <div class="log-mode-icon">${modeIconSVG(s.mode)}</div>
-          <div class="log-meta">
-            <span class="log-mode-name">${s.mode}</span>
-            <span class="log-time">${timeOfDay(s.startedAt)}</span>
-          </div>
-          <div class="log-duration ${isPartial ? 'partial' : ''}">${fmtDuration(s.silentSeconds)}</div>
-        </div>`;
-    });
-    dom.logList.innerHTML = html;
+    return;
   }
+
+  dom.logSub.textContent = `${sessions.length} session${sessions.length === 1 ? '' : 's'} · last ${CONFIG.LOG_DAYS} days`;
+
+  let html = '';
+  let lastDay = null;
+  allDescending.forEach(s => {
+    const dayKey = startOfDay(new Date(s.startedAt));
+    if (dayKey !== lastDay) {
+      html += `<div class="log-day">${fullDateLabel(s.startedAt)}</div>`;
+      lastDay = dayKey;
+    }
+    const isPartial = !s.completed;
+    const dot = s.interrupted ? '<span class="log-interrupted-dot" title="Interrupted"></span>' : '';
+    const dbLabel = (s.avgDb != null) ? `<span class="log-db">${s.avgDb} dB</span>` : '';
+    html += `
+      <div class="log-entry">
+        <div class="log-mode-icon">${modeIconSVG(s.mode)}</div>
+        <div class="log-meta">
+          <span class="log-mode-name">${dot}${s.mode}</span>
+          <span class="log-time">${timeOfDay(s.startedAt)}</span>
+        </div>
+        <div class="log-duration ${isPartial ? 'partial' : ''}">
+          <span>${fmtDuration(s.silentSeconds)}</span>
+          ${dbLabel}
+        </div>
+      </div>`;
+  });
+  dom.logList.innerHTML = html;
 }
 
 // ============================================================
 // Wire up
 // ============================================================
 function wire() {
-  // Modes
+  // Modes — only selectable when not running
   dom.modes.addEventListener('click', (e) => {
     const btn = e.target.closest('.mode');
     if (!btn || state.running) return;
@@ -905,7 +1040,7 @@ function wire() {
   dom.startBtn.addEventListener('click', startHandler);
 
   // Stop
-  dom.stopBtn.addEventListener('click', () => completeSession(false));
+  dom.stopBtn.addEventListener('click', () => completeSession(false, 'manual'));
 
   // Log open/close
   dom.logBtn.addEventListener('click', async () => {
@@ -914,23 +1049,44 @@ function wire() {
   });
   dom.logClose.addEventListener('click', () => { dom.logOverlay.hidden = true; });
 
-  // Re-acquire wake lock on return
-  document.addEventListener('visibilitychange', async () => {
-    if (!document.hidden && state.running && !state.wakeLock) {
-      await requestWakeLock();
+  // Summary close
+  dom.summaryClose.addEventListener('click', () => { dom.summaryOverlay.hidden = true; });
+
+  // Tap-to-pause — the big new thing in v0.4
+  // We attach to window and pause on any pointerdown while running,
+  // except when the tap lands on START/STOP buttons (so those remain responsive).
+  window.addEventListener('pointerdown', (e) => {
+    if (!state.running) return;
+    // Allow stop button to reach its own handler without first pausing
+    if (e.target.closest('#stopBtn')) return;
+    // If night is active, the first tap exits night without pausing.
+    // That way exiting steady night feels immediate, and a second tap will pause.
+    if (state.night) {
+      exitNight();
+      return;
     }
-    // Background → break night
+    if (!state.paused) enterPause('tap');
+  }, { passive: true });
+
+  // Key input also exits night
+  window.addEventListener('keydown', () => {
+    if (state.night) exitNight();
+  });
+
+  // Visibility -> focus-based pause + wake lock reacquire
+  document.addEventListener('visibilitychange', async () => {
+    if (!document.hidden) {
+      if (state.running && !state.wakeLock) await requestWakeLock();
+    }
+    // Pause triggers in sensingTick handle focus loss with grace period.
+    // But if the tab becomes hidden we also immediately fall out of night.
     if (document.hidden && state.night) exitNight();
   });
 
-  // Any touch/pointer input on the body exits night
-  ['touchstart', 'pointerdown', 'keydown'].forEach(evt => {
-    window.addEventListener(evt, () => {
-      if (state.night) exitNight();
-    }, { passive: true });
+  // Page close / tab close — best-effort save
+  window.addEventListener('pagehide', () => {
+    if (state.running) commitSessionOnUnload();
   });
-
-  setupNightTapExit();
 }
 
 // ============================================================

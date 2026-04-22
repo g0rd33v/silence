@@ -196,11 +196,43 @@
     </div>
   </div>
 
-  <!-- Completion toast -->
+  <!-- Session summary modal -->
+  <div class="overlay summary-overlay" id="summaryOverlay" hidden>
+    <div class="overlay-card summary-card">
+      <div class="summary-mode-icon" id="summaryModeIcon"></div>
+      <h2 class="summary-title" id="summaryTitle">Session complete</h2>
+      <p class="summary-sub" id="summarySub">20 minutes of real silence</p>
+
+      <div class="summary-stats">
+        <div class="summary-stat">
+          <span class="s-label">Duration</span>
+          <span class="s-value" id="summaryDuration">—</span>
+        </div>
+        <div class="summary-stat">
+          <span class="s-label">Interrupted</span>
+          <span class="s-value" id="summaryInterrupted">—</span>
+        </div>
+        <div class="summary-stat">
+          <span class="s-label">Avg noise</span>
+          <span class="s-value" id="summaryAvgDb">—</span>
+        </div>
+        <div class="summary-stat">
+          <span class="s-label">Peak noise</span>
+          <span class="s-value" id="summaryPeakDb">—</span>
+        </div>
+      </div>
+
+      <p class="summary-note">dB values are relative, not calibrated to a reference.</p>
+
+      <button class="primary-btn" id="summaryClose">Done</button>
+    </div>
+  </div>
+
+  <!-- Toast (kept for lightweight messages) -->
   <div class="toast" id="toast" hidden>
     <div class="toast-inner">
-      <span class="toast-title" id="toastTitle">Session complete</span>
-      <span class="toast-sub" id="toastSub">10 minutes of real silence</span>
+      <span class="toast-title" id="toastTitle">—</span>
+      <span class="toast-sub" id="toastSub">—</span>
     </div>
   </div>
 

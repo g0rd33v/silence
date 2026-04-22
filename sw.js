@@ -1,7 +1,7 @@
 /* Silence · service worker
    Minimal offline cache — app is tiny. */
 
-const CACHE = 'silence-v0-3';
+const CACHE = 'silence-v0-4';
 
 const ASSETS = [
   './',
