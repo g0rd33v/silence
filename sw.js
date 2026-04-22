@@ -1,13 +1,14 @@
 /* Silence · service worker
    Minimal offline cache — app is tiny. */
 
-const CACHE = 'silence-v0-9';
+const CACHE = 'silence-v1-0';
 
 const ASSETS = [
   './',
   './index.html',
   './styles.css',
   './app.js',
+  './whisper-worker.js',
   './manifest.webmanifest',
   './icons/icon.svg',
   './icons/icon-192.png',
