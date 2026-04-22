@@ -435,6 +435,10 @@ body::after {
 /* ============================================================
    Overlay (permissions, history)
    ============================================================ */
+
+/* Ensure [hidden] overrides display rules for overlays + toast */
+[hidden] { display: none !important; }
+
 .overlay {
   position: fixed;
   inset: 0;
