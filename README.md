@@ -17,35 +17,75 @@ Silence is the opposite. It tracks how much of your day you spent doing **nothin
 
 Everyone deserves this. It's not a luxury, it's not self-care, it's not wellness. It's the baseline condition for being a human being who is still recognizably themselves after a day in the world.
 
-## What it does
+## Features
 
-You pick how you want to disappear for a while:
+### Five modes for five moments
 
-- **Before** · 5 min · gather yourself before a meeting, a call, a decision
-- **After** · 10 min · digest what just happened before the next thing rushes in
-- **Unwind** · 20 min · release the pressure of the day
-- **Sleep** · 30 min · put the phone down before bed *(coming soon)*
-- **Infinity** · up to 60 min · no target, just space
+| Mode     | Duration   | When to use it |
+|----------|------------|----------------|
+| Before   | 5 min      | Gather yourself before a meeting, a call, a decision |
+| After    | 10 min     | Digest what just happened before the next thing rushes in |
+| Unwind   | 20 min     | Release the pressure of the day |
+| Sleep    | 30 min     | Put the phone down before bed *(locked — coming soon)* |
+| Infinity | up to 1 h  | No target, just space |
 
-You tap START. You put the phone down. You stop touching it. You stop moving it. You stop performing for it.
+### Verified silence, not performed silence
 
-The timer counts. If you tap the screen, pick up the phone, or switch away, it pauses. Come back within three minutes. If you don't, the session ends honestly — what was real gets saved.
+Silence counts only time it can verify. Three on-device sensors run in parallel, all locally:
 
-## What makes it real
+- **Microphone** — reads the ambient noise level every frame. Never pauses a session (you can meditate on a subway), but records the average and peak dB so you know where you were.
+- **Motion** — the accelerometer watches for the phone being picked up or shaken. If you touch the phone mid-session, it pauses.
+- **Touch** — any tap on the screen pauses the session. The dial label turns into **RESUME** — tap it again to continue.
+- **Focus** — if the tab is backgrounded (you got a call, switched apps), the session pauses after a 500 ms grace period.
 
-**It counts nothing it can't verify.** The microphone listens for ambient noise. The accelerometer watches for motion. The touch layer notices every tap. The dB number in your session summary is what your environment actually sounded like. You can meditate on a noisy subway — it won't stop you, but it will tell you the truth about where you were.
+### The 3-minute rule
 
-**It doesn't reward you for performing silence.** If you picked up the phone to check something, that session is marked as interrupted. No streaks to protect. No guilt. Just a log of what actually happened.
+When a session pauses, a countdown starts. You have three minutes to come back. If you don't, the session ends and saves exactly what was real — no padding, no guilt.
 
-**It gets out of the way.** After thirty seconds of verified silence, the entire interface fades. The dial, the buttons, the modes, all of it disappears. What's left is a black screen with a few faint stars. When you move, speak, or touch the phone, it comes back. The app's highest purpose is to stop being an app.
+### Steady Night
 
-**It never leaves your device.** The microphone reads a single number — volume — locally. Nothing is recorded, transmitted, or stored on a server. Every session log lives in your browser's storage, on your phone, under your control.
+Ten seconds of verified silence and the entire interface disappears. The dial, the buttons, the modes, everything fades to black. What remains is a field of faint stars. When you move, tap, or speak the environment back to life, the UI returns. The app's highest purpose is to stop being an app.
 
-## What it isn't
+### Interstellar start, awakening end
 
-It isn't meditation. It doesn't teach you how to breathe, how to sit, how to empty your mind. It doesn't have a guide, a voice, a curriculum.
+- **Start** — a synthesized pipe-organ swell. Three-voice stack (C2 / G2 / C3) with slow attack and a quiet airy shimmer on top. Cinematic, ceremonial — the opposite of a notification sound.
+- **End** — a resolved descending bell for Before, After, and Unwind. Sleep ends silently (don't wake the sleeper). Infinity caps at one hour and ends silently too.
 
-It isn't wellness. It doesn't have a streak to protect or a community to impress or a coach to please.
+### Rate how it felt
+
+After each session, five stars ask **how did it feel?** Each star plays a different sound:
+
+- 1★ — low muffled thud
+- 2★ — soft flat tone
+- 3★ — neutral mid chime
+- 4★ — warm major triad with reverb
+- 5★ — bright crystalline glass arpeggio
+
+Your rating is saved with the session. Skip if you don't want to answer.
+
+### The log tells the story
+
+Open the **Your silence** panel from the header:
+
+- **10-day bar chart** showing daily silence totals. Today is highlighted.
+- **A wave of stars above the bars** — your daily average rating rounded to an integer. Over time, if the bars get taller and the stars climb, you can literally *see* quality of life improving.
+- **Totals row** — 10-day total, session count, longest single session.
+- **Session-by-session log** grouped by day. Each row shows mode, time of day, rating stars, duration, and the session's average dB.
+- **Interrupted sessions** get a warm dot next to the mode name so you can tell at a glance what was clean and what wasn't.
+
+### Built to be forgotten
+
+- **Monochrome.** Black background, metallic dial, faint stars. Zero color accents. Nothing competing for your attention.
+- **No tracking, no analytics.** Every session log lives in your browser's IndexedDB, on your device, under your control.
+- **No sign-up.** No account, no email, no profile. You open the page, you tap START, you begin.
+- **Installable.** Add to Home Screen on iOS or Android and Silence launches full-screen with no browser chrome.
+- **Offline-capable.** A service worker caches the app so you can use it without a connection.
+
+### What it isn't
+
+It isn't meditation. It doesn't teach you how to breathe, how to sit, how to empty your mind.
+
+It isn't wellness. It doesn't have a streak to protect or a community to impress.
 
 It isn't productivity. The whole point is that the time you spend here produces nothing. That's the feature.
 
@@ -53,36 +93,18 @@ It's a ritual you already know how to do. You've stepped out for a smoke break. 
 
 ## Design principles
 
-**One mechanic.** The timer counts only while you're actually silent, still, and not touching the phone. Everything else is in service of that.
+**One mechanic.** The timer counts only while you're actually silent, still, and not touching the phone.
 
-**Monochrome.** No color. No gradients that signal motivation. No iconography borrowed from gyms or meditation centers. A black screen, a single dial, the minimum number of words.
+**Monochrome discipline.** No color. No gradients that signal motivation. No iconography borrowed from gyms or meditation centers.
 
-**No sound, almost.** A faint shimmer when you start. A gentle bell when a short session ends. Nothing during Sleep. Nothing during Infinity. The product refuses to interrupt you.
+**No sound, almost.** A faint shimmer at START, a gentle bell at the end, five short tones for rating. Nothing during Sleep or Infinity. The product refuses to interrupt you.
 
 **No shame.** If you break silence, the dial says RESUME, not FAILED. If you close the tab, the session saves what was real.
-
-## The log
-
-Every session is recorded: mode, time, duration, average and peak noise level, whether you stayed to the end. The log shows the last ten days as a simple bar chart and a reverse-chronological list.
-
-Over time, the log tells you something honest: how much of your life each day is still yours. If the bars get shorter, you know. If they get longer, you know that too. The data is the whole point.
-
-## Status
-
-**v0.5 — web PWA, April 2026.**
-
-- Modes: Before (5m) · After (10m) · Unwind (20m) · Sleep (30m, locked) · Infinity (up to 60m)
-- On-device sensing: microphone + motion + touch + visibility
-- Noise level recorded per session (relative dB, not calibrated)
-- Steady Night — UI fades to starfield after 30s of verified silence
-- IndexedDB log of every session, last 10 days visible on free tier
-- Installable as a PWA from mobile browsers
-- Telegram mini-app available at [t.me/LabsRobot/silence](https://t.me/LabsRobot/silence)
 
 ## Running locally
 
 ```bash
-# any static server works; the app has no build step
+# any static server works; there's no build step
 python3 -m http.server 8000
 # then open http://localhost:8000
 ```
@@ -92,8 +114,12 @@ The app requires HTTPS in production for microphone access. `http://localhost` w
 ## Roadmap
 
 - **Native iOS** — unlocks real Sleep mode (background sensing, phone face-down auto-detection), walk-away sessions where the screen can actually go off
-- **Native Android** — same, but on Android
+- **Native Android** — same, on the green side
 - **Pro tier** — full log history beyond 10 days, deeper analytics, themes
+
+## Status
+
+**v0.7 — web PWA + Telegram mini-app · April 2026.**
 
 ## License
 
