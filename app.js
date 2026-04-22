@@ -22,6 +22,8 @@ const CONFIG = {
   FOCUS_GRACE_MS:         500,     // tab can be blipped briefly
   PAUSE_TIMEOUT_MS:       3 * 60 * 1000, // 3 min -> auto-end
 
+  INFINITY_CAP_SECONDS:   60 * 60, // Infinity sessions end at 1 hour
+
   NIGHT_THRESHOLD_MS:     30000,
   NIGHT_EXIT_FADE_MS:     1200,
 
@@ -665,7 +667,8 @@ function updateRing() {
   if (state.duration > 0) {
     progress = Math.min(state.elapsed / state.duration, 1);
   } else {
-    progress = (state.elapsed % 600) / 600;
+    // Infinity — progress against the 60-minute cap
+    progress = Math.min(state.elapsed / CONFIG.INFINITY_CAP_SECONDS, 1);
   }
   dom.ringProgress.style.strokeDashoffset = C * (1 - progress);
 }
@@ -690,7 +693,7 @@ function setRunningUI(running, paused = false) {
   if (!running) {
     dom.dialLabel.textContent = 'SILENCE';
   } else if (paused) {
-    dom.dialLabel.textContent = 'PAUSED';
+    dom.dialLabel.textContent = 'RESUME';
     dom.statusText.textContent = pauseStatusText();
   } else {
     dom.dialLabel.textContent = 'SILENCE';
@@ -700,12 +703,11 @@ function setRunningUI(running, paused = false) {
 
 function pauseStatusText() {
   const reasonMap = {
-    'tap':    'Paused · you tapped the screen',
-    'motion': 'Paused · phone moved',
-    'focus':  'Paused · app in background',
+    'tap':    'You tapped the screen',
+    'motion': 'Phone moved',
+    'focus':  'App in background',
   };
-  const base = reasonMap[state.pauseReason] || 'Paused';
-  // Show countdown to auto-end
+  const base = reasonMap[state.pauseReason] || 'Interrupted';
   if (state.pausedAt) {
     const left = Math.max(0, CONFIG.PAUSE_TIMEOUT_MS - (Date.now() - state.pausedAt));
     const mins = Math.floor(left / 60000);
@@ -726,9 +728,7 @@ function sensingTick() {
     state.dbSum += db;
     state.dbSamples += 1;
     if (db > state.dbPeak) state.dbPeak = db;
-  }
-
-  // Motion — pauses if threshold sustained past grace
+  }  // Motion — pauses if threshold sustained past grace
   if (state.motionEnabled) {
     const tooMoving = state.currentMotion > CONFIG.MOTION_THRESHOLD;
     if (tooMoving) {
@@ -773,8 +773,15 @@ function sensingTick() {
   updateDialTime();
   updateRing();
 
+  // Session end conditions:
+  // - Timer mode: elapsed hits the target duration
+  // - Infinity (duration 0): elapsed hits INFINITY_CAP_SECONDS, ends silently
   if (state.duration > 0 && state.elapsed >= state.duration) {
     completeSession(true, 'complete');
+    return;
+  }
+  if (state.duration === 0 && state.elapsed >= CONFIG.INFINITY_CAP_SECONDS) {
+    completeSession(true, 'infinity-cap');
     return;
   }
 
@@ -819,6 +826,11 @@ async function startSession() {
 async function completeSession(naturalFinish = false, reason = 'manual') {
   if (!state.running) return;
 
+  // Mark not-running IMMEDIATELY to prevent re-entry (e.g. pause-timeout
+  // firing while an awaited db.add() is in flight).
+  state.running = false;
+  state.paused  = false;
+
   if (state.sensingFrame) cancelAnimationFrame(state.sensingFrame);
   state.sensingFrame = null;
   if (state.pauseTimeoutId) {
@@ -826,7 +838,7 @@ async function completeSession(naturalFinish = false, reason = 'manual') {
     state.pauseTimeoutId = null;
   }
 
-  const avgDb = state.dbSamples > 0 ? Math.round(state.dbSum / state.dbSamples) : null;
+  const avgDb  = state.dbSamples > 0 ? Math.round(state.dbSum / state.dbSamples) : null;
   const peakDb = state.dbSamples > 0 && isFinite(state.dbPeak) ? Math.round(state.dbPeak) : null;
 
   const session = {
@@ -836,7 +848,7 @@ async function completeSession(naturalFinish = false, reason = 'manual') {
     targetSeconds: state.duration,
     silentSeconds: Math.floor(state.elapsed),
     completed: naturalFinish,
-    endReason: reason,                   // 'complete' | 'manual' | 'pause-timeout' | 'closed'
+    endReason: reason,
     interrupted: state.interruptionCount > 0,
     interruptionCount: state.interruptionCount,
     pausedTotalSeconds: Math.round(state.pausedTotalMs / 1000),
@@ -846,17 +858,16 @@ async function completeSession(naturalFinish = false, reason = 'manual') {
 
   try { await db.add(session); } catch (e) { console.warn('[silence] save failed:', e); }
 
-  state.running = false;
-  state.paused  = false;
   setRunningUI(false);
   selectMode(state.mode);
   releaseWakeLock();
   if (state.night) exitNight();
 
-  if (naturalFinish) audio.playFinish();
+  const modesWithChime = new Set(['before', 'after', 'unwind']);
+  if (naturalFinish && modesWithChime.has(session.mode)) {
+    audio.playFinish();
+  }
 
-  // Only show the summary if the page is still visible and this isn't a
-  // beforeunload save. Closed-window completes skip this.
   if (reason !== 'closed') {
     showSummary(session);
   }
@@ -1052,20 +1063,31 @@ function wire() {
   // Summary close
   dom.summaryClose.addEventListener('click', () => { dom.summaryOverlay.hidden = true; });
 
-  // Tap-to-pause — the big new thing in v0.4
-  // We attach to window and pause on any pointerdown while running,
-  // except when the tap lands on START/STOP buttons (so those remain responsive).
+  // Tap interactions — v0.5:
+  //   Running + not paused: any tap pauses (except STOP button)
+  //   Running + paused: tap on dial resumes; other taps do nothing
+  //   Night active: first tap exits night (without pausing or resuming)
   window.addEventListener('pointerdown', (e) => {
     if (!state.running) return;
-    // Allow stop button to reach its own handler without first pausing
+    // STOP button always reaches its own handler
     if (e.target.closest('#stopBtn')) return;
-    // If night is active, the first tap exits night without pausing.
-    // That way exiting steady night feels immediate, and a second tap will pause.
+
+    // Night mode: first tap exits night
     if (state.night) {
       exitNight();
       return;
     }
-    if (!state.paused) enterPause('tap');
+
+    // If paused, only the dial resumes the session; other taps are ignored
+    if (state.paused) {
+      if (e.target.closest('#dial')) {
+        exitPause();
+      }
+      return;
+    }
+
+    // Running normally: any tap pauses
+    enterPause('tap');
   }, { passive: true });
 
   // Key input also exits night
