@@ -62,6 +62,78 @@ const CONFIG = {
 };
 
 // ============================================================
+// 1b. Settings — user preferences, persisted to localStorage
+// ============================================================
+const SETTINGS_KEY = 'silence.settings.v1';
+const DEFAULT_SETTINGS = {
+  soundPack: 'cosmos',  // 'cosmos' | 'bell' | 'pulse' | 'off'
+  haptics:   'on',      // 'on' | 'off'
+};
+const SOUND_PACKS = ['cosmos', 'bell', 'pulse', 'off'];
+
+const settings = {
+  _data: null,
+
+  load() {
+    if (this._data) return this._data;
+    try {
+      const raw = localStorage.getItem(SETTINGS_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        // Validate and merge with defaults so we never crash on bad data
+        this._data = {
+          soundPack: SOUND_PACKS.includes(parsed.soundPack) ? parsed.soundPack : DEFAULT_SETTINGS.soundPack,
+          haptics:   parsed.haptics === 'off' ? 'off' : 'on',
+        };
+        return this._data;
+      }
+    } catch (_) {}
+    this._data = { ...DEFAULT_SETTINGS };
+    return this._data;
+  },
+
+  save() {
+    try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(this._data)); } catch (_) {}
+  },
+
+  get(key) {
+    return this.load()[key];
+  },
+
+  set(key, value) {
+    this.load();
+    this._data[key] = value;
+    this.save();
+  },
+};
+
+// ============================================================
+// 1c. Haptics — Web Vibration API, fails silently when unavailable
+// ============================================================
+//
+// iOS Safari does not expose navigator.vibrate. Android Chrome and
+// Telegram WebApps do. We wrap navigator.vibrate so calls are no-ops
+// when haptics are disabled in settings or when the API is missing —
+// callers never need to check.
+const haptics = {
+  available() {
+    return typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function';
+  },
+
+  fire(pattern) {
+    if (settings.get('haptics') !== 'on') return;
+    if (!this.available()) return;
+    try { navigator.vibrate(pattern); } catch (_) {}
+  },
+
+  // Named patterns — all callers use these, never fire raw numbers
+  tap()       { this.fire(15); },               // mode select, star tap
+  short()     { this.fire(20); },               // pause acknowledgment
+  medium()    { this.fire(40); },               // session start, resume
+  success()   { this.fire([40, 80, 40]); },     // session complete (natural finish)
+};
+
+// ============================================================
 // 2. State
 // ============================================================
 const state = {
@@ -151,6 +223,9 @@ const dom = {
   ratingPrompt:      $('ratingPrompt'),
   ratingStars:       $('ratingStars'),
   ratingSkip:        $('ratingSkip'),
+
+  soundPackChips:    $('soundPackChips'),
+  hapticsToggle:     $('hapticsToggle'),
 };
 
 // ============================================================
@@ -325,7 +400,18 @@ const audio = {
     return { input: delay, output: wet };
   },
 
+  // Dispatcher — picks an implementation based on the user's sound pack.
+  // 'off' returns immediately. Each pack-named impl is async so we await
+  // init/resume the same way regardless of pack.
   async playStart() {
+    const pack = settings.get('soundPack');
+    if (pack === 'off') return;
+    if (pack === 'bell')   return this._bellStart();
+    if (pack === 'pulse')  return this._pulseStart();
+    return this._cosmosStart();
+  },
+
+  async _cosmosStart() {
     await this.init();
     await this.resume();
     const now = this.ctx.currentTime;
@@ -398,9 +484,78 @@ const audio = {
     });
   },
 
+  // Bell pack START — Tibetan-style singing bowl. A single struck tone
+  // with rich inharmonic partials and very long decay. Contemplative.
+  async _bellStart() {
+    await this.init();
+    await this.resume();
+    const now = this.ctx.currentTime;
+    const reverb = this.makeReverb();
+
+    // Fundamental + bell-like inharmonic partials (singing bowl ratios)
+    const fundamental = 220; // A3
+    const partials = [
+      { ratio: 1.0,   gain: 0.30 },
+      { ratio: 2.76,  gain: 0.18 },
+      { ratio: 5.40,  gain: 0.10 },
+      { ratio: 8.93,  gain: 0.05 },
+    ];
+
+    partials.forEach((p, i) => {
+      const osc = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = fundamental * p.ratio;
+      // Higher partials decay faster (acoustic realism)
+      const decay = 4.5 / (i * 0.6 + 1);
+      g.gain.setValueAtTime(0, now);
+      g.gain.linearRampToValueAtTime(p.gain, now + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + decay);
+      osc.connect(g);
+      g.connect(this.masterGain);
+      g.connect(reverb.input);
+      osc.start(now);
+      osc.stop(now + decay + 0.1);
+    });
+
+    // Soft low warmth underneath
+    const sub = this.ctx.createOscillator();
+    const sg = this.ctx.createGain();
+    sub.type = 'sine';
+    sub.frequency.value = 110; // A2
+    sg.gain.setValueAtTime(0, now);
+    sg.gain.linearRampToValueAtTime(0.10, now + 0.04);
+    sg.gain.exponentialRampToValueAtTime(0.0001, now + 3);
+    sub.connect(sg);
+    sg.connect(this.masterGain);
+    sub.start(now);
+    sub.stop(now + 3.1);
+  },
+
+  // Pulse pack START — minimalist, single short tone. A modern marker.
+  async _pulseStart() {
+    await this.init();
+    await this.resume();
+    const now = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = 660;
+    g.gain.setValueAtTime(0, now);
+    g.gain.linearRampToValueAtTime(0.18, now + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + 0.25);
+    osc.connect(g);
+    g.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + 0.3);
+  },
+
   // Rating sounds — distinct emotional register per star count.
   // 1 = dull low thud, 5 = bright crystalline glass.
+  // These are shared across packs (they're emotional feedback, not ambient
+  // atmosphere), but the 'off' pack silences them too.
   async playRating(n) {
+    if (settings.get('soundPack') === 'off') return;
     await this.init();
     await this.resume();
     const now = this.ctx.currentTime;
@@ -534,9 +689,17 @@ const audio = {
   },
 
   // Zoom-out — played when a session pauses (tap or motion).
-  // A descending pitch glide with a filter closing down. Feels like
-  // the UI retreating: sound pulls back with it.
   async playZoomOut() {
+    const pack = settings.get('soundPack');
+    if (pack === 'off') return;
+    if (pack === 'bell')   return this._bellZoomOut();
+    if (pack === 'pulse')  return this._pulseZoomOut();
+    return this._cosmosZoomOut();
+  },
+
+  // Cosmos zoom-out: descending pitch glide with filter closing down.
+  // Feels like the UI retreating: sound pulls back with it.
+  async _cosmosZoomOut() {
     await this.init();
     await this.resume();
     const now = this.ctx.currentTime;
@@ -574,10 +737,60 @@ const audio = {
     });
   },
 
+  // Bell zoom-out: muted struck tone with quick decay. The bowl is hushed.
+  async _bellZoomOut() {
+    await this.init();
+    await this.resume();
+    const now = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    const filter = this.ctx.createBiquadFilter();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(330, now);
+    osc.frequency.exponentialRampToValueAtTime(165, now + 0.6);
+    filter.type = 'lowpass';
+    filter.frequency.value = 1200;
+    filter.Q.value = 1.5;
+    g.gain.setValueAtTime(0, now);
+    g.gain.linearRampToValueAtTime(0.18, now + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + 0.7);
+    osc.connect(filter);
+    filter.connect(g);
+    g.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + 0.75);
+  },
+
+  // Pulse zoom-out: single short low click.
+  async _pulseZoomOut() {
+    await this.init();
+    await this.resume();
+    const now = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = 330;
+    g.gain.setValueAtTime(0, now);
+    g.gain.linearRampToValueAtTime(0.14, now + 0.005);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + 0.12);
+    osc.connect(g);
+    g.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + 0.15);
+  },
+
   // Zoom-in — played when a paused session resumes.
-  // Mirror of zoom-out: pitch rising, filter opening up, volume
-  // arriving rather than leaving. Feels like the UI returning.
   async playZoomIn() {
+    const pack = settings.get('soundPack');
+    if (pack === 'off') return;
+    if (pack === 'bell')   return this._bellZoomIn();
+    if (pack === 'pulse')  return this._pulseZoomIn();
+    return this._cosmosZoomIn();
+  },
+
+  // Cosmos zoom-in: mirror of cosmos zoom-out, pitch rising, filter
+  // opening, volume arriving rather than leaving.
+  async _cosmosZoomIn() {
     await this.init();
     await this.resume();
     const now = this.ctx.currentTime;
@@ -614,7 +827,52 @@ const audio = {
     });
   },
 
+  // Bell zoom-in: brief warm tone, the room gathering itself back.
+  async _bellZoomIn() {
+    await this.init();
+    await this.resume();
+    const now = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(165, now);
+    osc.frequency.exponentialRampToValueAtTime(330, now + 0.5);
+    g.gain.setValueAtTime(0, now);
+    g.gain.linearRampToValueAtTime(0.18, now + 0.4);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + 0.85);
+    osc.connect(g);
+    g.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + 0.9);
+  },
+
+  // Pulse zoom-in: single short high click — a marker, mirror of zoom-out.
+  async _pulseZoomIn() {
+    await this.init();
+    await this.resume();
+    const now = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = 660;
+    g.gain.setValueAtTime(0, now);
+    g.gain.linearRampToValueAtTime(0.14, now + 0.005);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + 0.12);
+    osc.connect(g);
+    g.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + 0.15);
+  },
+
   async playFinish() {
+    const pack = settings.get('soundPack');
+    if (pack === 'off') return;
+    if (pack === 'bell')   return this._bellFinish();
+    if (pack === 'pulse')  return this._pulseFinish();
+    return this._cosmosFinish();
+  },
+
+  async _cosmosFinish() {
     await this.init();
     await this.resume();
     const now = this.ctx.currentTime;
@@ -633,6 +891,57 @@ const audio = {
       gain.connect(reverb.input);
       osc.start(now + delay);
       osc.stop(now + delay + 2.4);
+    });
+  },
+
+  // Bell pack FINISH — single struck bowl, longer than start, ascending
+  // partial decay so the room "breathes out".
+  async _bellFinish() {
+    await this.init();
+    await this.resume();
+    const now = this.ctx.currentTime;
+    const reverb = this.makeReverb();
+    const fundamental = 196; // G3 — slightly lower than start, downward resolve
+    const partials = [
+      { ratio: 1.0,   gain: 0.32 },
+      { ratio: 2.76,  gain: 0.20 },
+      { ratio: 5.40,  gain: 0.10 },
+      { ratio: 8.93,  gain: 0.05 },
+    ];
+    partials.forEach((p, i) => {
+      const osc = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = fundamental * p.ratio;
+      const decay = 5.5 / (i * 0.5 + 1);
+      g.gain.setValueAtTime(0, now);
+      g.gain.linearRampToValueAtTime(p.gain, now + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + decay);
+      osc.connect(g);
+      g.connect(this.masterGain);
+      g.connect(reverb.input);
+      osc.start(now);
+      osc.stop(now + decay + 0.1);
+    });
+  },
+
+  // Pulse pack FINISH — two short ascending ticks, no reverb. Modern.
+  async _pulseFinish() {
+    await this.init();
+    await this.resume();
+    const now = this.ctx.currentTime;
+    [[660, 0.00], [990, 0.18]].forEach(([f, d]) => {
+      const osc = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = f;
+      g.gain.setValueAtTime(0, now + d);
+      g.gain.linearRampToValueAtTime(0.16, now + d + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + d + 0.22);
+      osc.connect(g);
+      g.connect(this.masterGain);
+      osc.start(now + d);
+      osc.stop(now + d + 0.25);
     });
   },
 };
@@ -947,6 +1256,7 @@ function enterPause(reason) {
 
   setRunningUI(true, true);
   audio.playZoomOut();
+  haptics.short();
 
   // 3-min auto-end timeout
   state.pauseTimeoutId = setTimeout(() => {
@@ -972,6 +1282,7 @@ function exitPause() {
   state.focusLostSince = null;
   setRunningUI(true, false);
   audio.playZoomIn();
+  haptics.medium();
 }
 
 // ============================================================
@@ -1138,6 +1449,7 @@ async function startSession() {
   dom.dial.classList.add('starting');
   setTimeout(() => dom.dial.classList.remove('starting'), 2600);
   audio.playStart();
+  haptics.medium();
 
   setRunningUI(true);
   state.sensingFrame = requestAnimationFrame(sensingTick);
@@ -1191,6 +1503,7 @@ async function completeSession(naturalFinish = false, reason = 'manual') {
   const modesWithChime = new Set(['before', 'after', 'unwind']);
   if (naturalFinish && modesWithChime.has(session.mode)) {
     audio.playFinish();
+    haptics.success();
   }
 
   if (reason !== 'closed') {
@@ -1276,8 +1589,9 @@ async function submitRating(n) {
     s.classList.toggle('lit', i < n);
   });
 
-  // Play the rating sound
+  // Play the rating sound + tactile feedback
   audio.playRating(n);
+  haptics.tap();
 
   // Acknowledge + update the stored session
   dom.ratingPrompt.textContent = 'Saved.';
@@ -1417,12 +1731,34 @@ async function renderLog() {
 // ============================================================
 // 20. Wire — event handlers
 // ============================================================
+// Sync the settings UI (chips + toggle) to whatever's currently in storage.
+// Called at boot, when the log panel opens, and after every settings change.
+function applySettingsUI() {
+  const pack    = settings.get('soundPack');
+  const haptOn  = settings.get('haptics') === 'on';
+
+  // Sound pack chips — mark the current one as selected
+  if (dom.soundPackChips) {
+    dom.soundPackChips.querySelectorAll('.settings-chip').forEach((chip) => {
+      const isSelected = chip.dataset.pack === pack;
+      chip.classList.toggle('selected', isSelected);
+      chip.setAttribute('aria-checked', String(isSelected));
+    });
+  }
+
+  // Haptics toggle — set aria-checked, CSS handles visual state
+  if (dom.hapticsToggle) {
+    dom.hapticsToggle.setAttribute('aria-checked', String(haptOn));
+  }
+}
+
 function wire() {
   // Modes — only selectable when not running
   dom.modes.addEventListener('click', (e) => {
     const btn = e.target.closest('.mode');
     if (!btn || state.running) return;
     selectMode(btn.dataset.mode);
+    haptics.tap();
   });
 
   // Start (dial or start button)
@@ -1448,6 +1784,7 @@ function wire() {
   // Log open/close
   dom.logBtn.addEventListener('click', async () => {
     dom.logOverlay.hidden = false;
+    applySettingsUI();
     await renderLog();
   });
   dom.logClose.addEventListener('click', () => { dom.logOverlay.hidden = true; });
@@ -1539,6 +1876,33 @@ function wire() {
   window.addEventListener('pagehide', () => {
     if (state.running) commitSessionOnUnload();
   });
+
+  // ----- Settings: sound pack chips
+  if (dom.soundPackChips) {
+    dom.soundPackChips.addEventListener('click', (e) => {
+      const chip = e.target.closest('.settings-chip');
+      if (!chip) return;
+      const pack = chip.dataset.pack;
+      if (!pack) return;
+      settings.set('soundPack', pack);
+      applySettingsUI();
+      haptics.tap();
+      // Audible preview so the user immediately hears their choice.
+      // Skipped for 'off' — the silence IS the preview.
+      if (pack !== 'off') audio.playZoomIn();
+    });
+  }
+
+  // ----- Settings: haptics toggle
+  if (dom.hapticsToggle) {
+    dom.hapticsToggle.addEventListener('click', () => {
+      const next = settings.get('haptics') === 'on' ? 'off' : 'on';
+      settings.set('haptics', next);
+      applySettingsUI();
+      // If they just turned it ON, demonstrate. If OFF, no preview.
+      if (next === 'on') haptics.tap();
+    });
+  }
 }
 
 // ============================================================
@@ -1547,6 +1911,7 @@ function wire() {
 async function boot() {
   populateStaticIcons();
   wire();
+  applySettingsUI();
   selectMode('unwind');
   stars.init();
 
