@@ -74,13 +74,12 @@ const dom = {
   dialBtn:        $('dialBtn'),
   dialLabel:      $('dialLabel'),
   dialTime:       $('dialTime'),
-  dialHint:       $('dialHint'),
   ringProgress:   $('ringProgress'),
+  startBtn:       $('startBtn'),
   stopBtn:        $('stopBtn'),
   status:         $('status'),
   statusDot:      $('statusDot'),
   statusText:     $('statusText'),
-  tagline:        $('tagline'),
 
   permOverlay:    $('permOverlay'),
   permGrant:      $('permGrant'),
@@ -97,8 +96,6 @@ const dom = {
   toast:          $('toast'),
   toastTitle:     $('toastTitle'),
   toastSub:       $('toastSub'),
-
-  stars:          $('stars'),
 };
 
 // ============================================================
@@ -137,26 +134,6 @@ function dayLabel(ts) {
   const d = new Date(ts);
   const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   return days[d.getDay()];
-}
-
-// ============================================================
-// Starfield — generate stars once
-// ============================================================
-function makeStars() {
-  const n = 60;
-  const frag = document.createDocumentFragment();
-  for (let i = 0; i < n; i++) {
-    const s = document.createElement('div');
-    const big = Math.random() > 0.9;
-    const tiny = Math.random() > 0.85;
-    s.className = 'star' + (big ? ' big' : tiny ? ' tiny' : '');
-    s.style.left = Math.random() * 100 + '%';
-    s.style.top = Math.random() * 70 + '%';
-    s.style.animationDelay = (Math.random() * 4) + 's';
-    s.style.setProperty('--base', (0.3 + Math.random() * 0.7).toFixed(2));
-    frag.appendChild(s);
-  }
-  dom.stars.appendChild(frag);
 }
 
 // ============================================================
@@ -379,7 +356,7 @@ function selectMode(mode) {
 // Timer + sensing loop
 // ============================================================
 function updateRing() {
-  const C = 578.053;
+  const C = 540.354; // 2π·86
   let progress = 0;
   if (state.duration > 0) {
     progress = Math.min(state.elapsed / state.duration, 1);
@@ -402,18 +379,18 @@ function updateDialTime() {
 function setRunningUI(running, paused = false) {
   dom.dial.classList.toggle('running', running);
   dom.dial.classList.toggle('paused', paused);
+  dom.startBtn.hidden = running;
   dom.stopBtn.hidden = !running;
   dom.status.hidden = !running;
   dom.status.classList.toggle('paused', paused);
 
   if (!running) {
     dom.dialLabel.textContent = 'SILENCE';
-    dom.dialHint.textContent = 'Tap to start';
   } else if (paused) {
     dom.dialLabel.textContent = 'PAUSED';
     dom.statusText.textContent = pauseReason();
   } else {
-    dom.dialLabel.textContent = state.mode.toUpperCase();
+    dom.dialLabel.textContent = 'SILENCE';
     dom.statusText.textContent = 'Listening for silence…';
   }
 }
@@ -627,11 +604,13 @@ function wire() {
     selectMode(btn.dataset.mode);
   });
 
-  // Dial — start
-  dom.dialBtn.addEventListener('click', () => {
+  // Dial OR START button — both start session
+  const startHandler = () => {
     if (state.running) return;
     startSession();
-  });
+  };
+  dom.dialBtn.addEventListener('click', startHandler);
+  dom.startBtn.addEventListener('click', startHandler);
 
   // Stop button
   dom.stopBtn.addEventListener('click', () => {
@@ -664,7 +643,6 @@ function wire() {
 // Boot
 // ============================================================
 async function boot() {
-  makeStars();
   wire();
   selectMode('unwind'); // default from the mockup
 
