@@ -29,11 +29,11 @@ const CONFIG = {
 
   LOG_DAYS:               10,
 
-  // dB conversion tuning — we shift dBFS up by this offset so the
-  // number reads in a familiar range (ambient room ~35–45, speech ~55–65).
-  // It's a relative scale, NOT an absolute SPL reading.
-  DB_OFFSET:              90,
-  DB_FLOOR:               -60,     // below this dBFS we clamp
+  // dB conversion tuning — we convert RMS amplitude to dBFS then add
+  // a comfort offset so the number reads in a familiar human range
+  // (quiet room ~30–40, speech ~55–70). Relative, not calibrated.
+  DB_OFFSET:              85,
+  DB_FLOOR:               -70,     // clamp silence below this dBFS
 };
 
 // ============================================================
@@ -495,11 +495,16 @@ async function startMic() {
 
 function readMicLevel() {
   if (!state.analyser) return 0;
-  const buf = new Uint8Array(state.analyser.frequencyBinCount);
-  state.analyser.getByteFrequencyData(buf);
-  let sum = 0;
-  for (let i = 0; i < buf.length; i++) sum += buf[i];
-  return sum / buf.length / 255;
+  // Time-domain float data gives us true audio amplitude (-1..1).
+  // RMS over the buffer is a stable measure of loudness.
+  const buf = new Float32Array(state.analyser.fftSize);
+  state.analyser.getFloatTimeDomainData(buf);
+  let sumSq = 0;
+  for (let i = 0; i < buf.length; i++) {
+    sumSq += buf[i] * buf[i];
+  }
+  const rms = Math.sqrt(sumSq / buf.length);
+  return rms; // roughly 0..1
 }
 
 // ============================================================
@@ -721,8 +726,10 @@ function sensingTick() {
   if (!state.running) return;
   const now = Date.now();
 
-  // Mic — always sample when running, for dB recording. Never pauses.
-  if (state.micEnabled) {
+  // Mic — sample only when not paused. A paused session's noise is the
+  // noise of an interruption (e.g. a phone call), not the ambient the
+  // user chose to sit with.
+  if (state.micEnabled && !state.paused) {
     state.currentLevel = readMicLevel();
     const db = levelToDb(state.currentLevel);
     state.dbSum += db;
@@ -1050,8 +1057,17 @@ function wire() {
   dom.dialBtn.addEventListener('click', startHandler);
   dom.startBtn.addEventListener('click', startHandler);
 
-  // Stop
-  dom.stopBtn.addEventListener('click', () => completeSession(false, 'manual'));
+  // Stop — respond to pointerdown directly (more reliable than click in
+  // environments where the window-level pointerdown listener might swallow
+  // the event, or on touch devices where click can be debounced).
+  dom.stopBtn.addEventListener('pointerdown', (e) => {
+    e.stopPropagation();
+    completeSession(false, 'manual');
+  });
+  dom.stopBtn.addEventListener('click', (e) => {
+    // Fallback if pointerdown wasn't supported
+    if (state.running) completeSession(false, 'manual');
+  });
 
   // Log open/close
   dom.logBtn.addEventListener('click', async () => {
@@ -1069,10 +1085,10 @@ function wire() {
   //   Night active: first tap exits night (without pausing or resuming)
   window.addEventListener('pointerdown', (e) => {
     if (!state.running) return;
-    // STOP button always reaches its own handler
+    // STOP button has its own handler above; let it manage itself
     if (e.target.closest('#stopBtn')) return;
 
-    // Night mode: first tap exits night
+    // Night mode: first pointer input exits night
     if (state.night) {
       exitNight();
       return;
@@ -1089,6 +1105,19 @@ function wire() {
     // Running normally: any tap pauses
     enterPause('tap');
   }, { passive: true });
+
+  // Belt-and-suspenders: explicit listener on the Night layer itself.
+  // This covers desktop Chrome quirks where the window-level pointerdown
+  // might miss synthetic or trusted-only events targeted at the canvas.
+  dom.night.addEventListener('pointerdown', () => {
+    if (state.night) exitNight();
+  });
+  dom.night.addEventListener('click', () => {
+    if (state.night) exitNight();
+  });
+  dom.night.addEventListener('mousedown', () => {
+    if (state.night) exitNight();
+  });
 
   // Key input also exits night
   window.addEventListener('keydown', () => {
