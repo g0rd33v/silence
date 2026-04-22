@@ -27,6 +27,11 @@
    19. Log rendering         — stats panel (bar chart + entries)
    20. Wire                 — event handlers
    21. Boot                 — init sequence
+
+   v1.0: STT module (whisper.js) loaded BEFORE this file. STT
+   pipeline owned by the global `whisper` object; we just wire
+   it into startSession/completeSession and add a ScriptProcessor
+   tap to the mic source so samples flow into the worker.
    ============================================================ */
 
 'use strict';
@@ -59,6 +64,19 @@ const CONFIG = {
 
   // Global output gain for all synthesized audio — one knob for volume
   AUDIO_MASTER_GAIN:      0.22,
+
+  // ----- Voice notes / STT (v1.0) -----
+  // Whisper expects 16 kHz mono Float32. We resample on the fly using a
+  // simple ratio downsample (audio is already low-frequency speech).
+  STT_SAMPLE_RATE:        16000,
+  // How long each transcribed slice is, in seconds. Whisper's native
+  // receptive field is 30s; we match that.
+  STT_CHUNK_SECONDS:      30,
+  // How often we drain the buffer and dispatch to the worker.
+  STT_DISPATCH_INTERVAL_MS: 30 * 1000,
+  // Drop transcripts under this character count — Whisper hallucinates
+  // common stock phrases ("Thank you.", "you", ".") on near-silent input.
+  STT_MIN_CHARS:          2,
 };
 
 // ============================================================
@@ -82,7 +100,6 @@ const settings = {
       const raw = localStorage.getItem(SETTINGS_KEY);
       if (raw) {
         const parsed = JSON.parse(raw);
-        // Validate and merge with defaults so we never crash on bad data
         this._data = {
           soundPack:  SOUND_PACKS.includes(parsed.soundPack) ? parsed.soundPack : DEFAULT_SETTINGS.soundPack,
           haptics:    parsed.haptics === 'off' ? 'off' : 'on',
@@ -114,23 +131,7 @@ const settings = {
 // 1c. Haptics — Telegram WebApp HapticFeedback (works on iOS), then
 //     Web Vibration API (Android Chrome), then silent no-op.
 // ============================================================
-//
-// iOS Safari does NOT expose navigator.vibrate. iOS Chrome doesn't either
-// (it's just a Safari skin on iOS). The only way to deliver real haptics
-// on iPhone is through Telegram's WebApp.HapticFeedback bridge, which
-// talks to the native iOS Taptic Engine.
-//
-// Strategy, in priority order:
-//   1. Telegram WebApp.HapticFeedback (best — works iOS + Android in TG)
-//   2. navigator.vibrate (Android Chrome / Firefox / Edge outside TG)
-//   3. Silent no-op (iOS Safari, desktop, anywhere unsupported)
-//
-// Desktop returns true from navigator.vibrate but has no motor — that's
-// expected and harmless. We just don't claim "haptics work" without a
-// way to actually verify. The settings toggle is still a real switch.
 const haptics = {
-  // Telegram bridge if present. ready() just signals we've initialized;
-  // safe to call multiple times.
   _tg() {
     const tg = (typeof window !== 'undefined') && window.Telegram && window.Telegram.WebApp;
     if (tg && tg.HapticFeedback) {
@@ -140,16 +141,12 @@ const haptics = {
     return null;
   },
 
-  // For diagnostics — what backend will we actually use right now?
-  // Returns 'telegram' | 'vibrate' | 'none'.
   backend() {
     if (this._tg()) return 'telegram';
     if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') return 'vibrate';
     return 'none';
   },
 
-  // Internal dispatcher — every named pattern routes through here.
-  // 'kind' is one of: 'tap', 'short', 'medium', 'success'.
   fire(kind) {
     if (settings.get('haptics') !== 'on') return;
     const tg = this._tg();
@@ -172,7 +169,6 @@ const haptics = {
     }
   },
 
-  // Named callsites — never fire raw values from app code.
   tap()       { this.fire('tap'); },
   short()     { this.fire('short'); },
   medium()    { this.fire('medium'); },
@@ -189,10 +185,9 @@ const state = {
   running: false,
   paused: false,
   startedAt: null,
-  elapsed: 0,                // silent seconds accumulated
+  elapsed: 0,
   lastTickAt: null,
 
-  // Sensing
   micEnabled: false,
   motionEnabled: false,
   audioCtx: null,
@@ -203,29 +198,30 @@ const state = {
   motionSince: null,
   focusLostSince: null,
 
-  // Pause tracking
-  pausedAt: null,            // ms timestamp when paused
-  pauseReason: null,         // 'tap' | 'motion' | 'focus'
+  pausedAt: null,
+  pauseReason: null,
   pauseTimeoutId: null,
-  pausedTotalMs: 0,          // cumulative paused duration in ms, saved with session
+  pausedTotalMs: 0,
   interruptionCount: 0,
 
-  // Noise accumulators
-  dbSum: 0,                  // sum of per-tick dB readings
-  dbSamples: 0,              // count of readings
+  dbSum: 0,
+  dbSamples: 0,
   dbPeak: -Infinity,
 
-  // Steady night
   silenceContinuousSince: null,
   night: false,
 
   wakeLock: null,
   sensingFrame: null,
-  currentSessionId: null,  // id of the session just completed, for rating update
+  currentSessionId: null,
 
-  // Voice notes (v0.9 UI-only; STT arrives in v1.0)
-  voiceNotesEnabled: false,  // true = transcribe during this session
-  voiceNotesText:    '',     // appended-to by STT in v1.0; stays '' in v0.9
+  voiceNotesEnabled: false,
+  voiceNotesText:    '',
+
+  // STT (v1.0) — Web Audio nodes for the worker tap, set in startMic
+  micSourceNode:  null,     // MediaStreamSource for both analyser and STT
+  sttProcessor:   null,     // ScriptProcessor pumping samples to whisper
+  sttSink:        null,     // muted gain node so the processor actually fires
 };
 
 // ============================================================
@@ -295,9 +291,6 @@ function fmtTime(seconds) {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
-// Strict HTML-escape for user-captured text (voice notes). We build log
-// entry markup via template strings, so raw transcript text must be escaped
-// before it hits innerHTML. Covers the five characters that matter.
 function escapeHTML(str) {
   if (str == null) return '';
   return String(str)
@@ -308,7 +301,6 @@ function escapeHTML(str) {
     .replace(/'/g, '&#39;');
 }
 
-// Notebook glyph used in the log-entry voice notes badge.
 const NOTEBOOK_SVG_INLINE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4.5A1.5 1.5 0 0 1 6.5 3H18a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6.5A1.5 1.5 0 0 1 5 19.5v-15z"/><path d="M9 7h7M9 11h7M9 15h4"/></svg>';
 
 function fmtDuration(seconds) {
@@ -368,9 +360,6 @@ function timeOfDay(ts) {
   return `${h}:${String(m).padStart(2, '0')} ${ampm}`;
 }
 
-// Convert normalized audio level (0..1) to relative dB.
-// 0 -> returns DB_FLOOR (silence)
-// 1 -> returns ~90 dB
 function levelToDb(level) {
   if (level <= 0) return CONFIG.DB_FLOOR + CONFIG.DB_OFFSET;
   const dbfs = 20 * Math.log10(level);
@@ -379,7 +368,7 @@ function levelToDb(level) {
 }
 
 // ============================================================
-// 4. SVG assets (single source, populated into empty HTML slots at boot)
+// 4. SVG assets
 // ============================================================
 function modeIconSVG(mode, size = 20) {
   const common = `viewBox="0 0 32 32" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"`;
@@ -399,43 +388,26 @@ function modeIconSVG(mode, size = 20) {
   }
 }
 
-// ----- Single source for the star icon (used in rating UI, bar chart, log entries)
 const STAR_PATH = 'M12 2.5l2.9 6.6 7.1 0.7-5.4 4.8 1.6 7-6.2-3.7-6.2 3.7 1.6-7-5.4-4.8 7.1-0.7z';
 
 function starSVG(size, strokeWidth = 1.4) {
   return `<svg viewBox="0 0 24 24" width="${size}" height="${size}" aria-hidden="true"><path d="${STAR_PATH}" fill="none" stroke="currentColor" stroke-width="${strokeWidth}" stroke-linejoin="round"/></svg>`;
 }
 
-// 100%-sized version for the small inline star spans (bar chart, log entries)
 const STAR_SVG_INLINE = `<svg viewBox="0 0 24 24" width="100%" height="100%" aria-hidden="true"><path d="${STAR_PATH}" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>`;
 
-// Small glyphs used in the mode row (Sleep lock, Infinity circle)
 const LOCK_SVG = `<svg viewBox="0 0 14 18" width="12" height="14" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="8" width="10" height="8" rx="1.5"/><path d="M4.5 8V5a2.5 2.5 0 0 1 5 0v3"/></svg>`;
 const CIRCLE_SVG = `<svg viewBox="0 0 14 14" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1" aria-hidden="true"><circle cx="7" cy="7" r="5.5"/></svg>`;
 
-// Inject static icons once at boot, using the single source above. The
-// HTML ships with empty slots — JS fills them. Keeps copy-paste out of
-// the markup.
 function populateStaticIcons() {
-  // Mode buttons: each .mode has an empty .mode-icon that we fill.
   document.querySelectorAll('.mode').forEach((btn) => {
     const mode = btn.dataset.mode;
     const slot = btn.querySelector('.mode-icon');
     if (slot) slot.innerHTML = modeIconSVG(mode, 28);
   });
-
-  // Sleep lock + Infinity circle glyphs in the mode-time row
-  document.querySelectorAll('[data-icon="lock"]').forEach((el) => {
-    el.innerHTML = LOCK_SVG;
-  });
-  document.querySelectorAll('[data-icon="circle"]').forEach((el) => {
-    el.innerHTML = CIRCLE_SVG;
-  });
-
-  // Five rating stars in the summary modal
-  document.querySelectorAll('#ratingStars .rating-star').forEach((btn) => {
-    btn.innerHTML = starSVG(32);
-  });
+  document.querySelectorAll('[data-icon="lock"]').forEach((el) => { el.innerHTML = LOCK_SVG; });
+  document.querySelectorAll('[data-icon="circle"]').forEach((el) => { el.innerHTML = CIRCLE_SVG; });
+  document.querySelectorAll('#ratingStars .rating-star').forEach((btn) => { btn.innerHTML = starSVG(32); });
 }
 
 // ============================================================
@@ -473,9 +445,6 @@ const audio = {
     return { input: delay, output: wet };
   },
 
-  // Dispatcher — picks an implementation based on the user's sound pack.
-  // 'off' returns immediately. Each pack-named impl is async so we await
-  // init/resume the same way regardless of pack.
   async playStart() {
     const pack = settings.get('soundPack');
     if (pack === 'off') return;
@@ -488,48 +457,33 @@ const audio = {
     await this.init();
     await this.resume();
     const now = this.ctx.currentTime;
-
-    // Pipe-organ-inspired swell. Stacked low fundamentals with slow attack
-    // and long release, plus a quiet high shimmer on top. Cinematic,
-    // ceremonial — weight rather than sparkle.
-    //
-    // Root chord: C2 (65.41), G2 (98.00), C3 (130.81) — open fifth + octave.
-    // Harmonics per voice add organ character.
     const voices = [
-      { f: 65.41,  gain: 0.30, harm: [1, 2, 3, 4] }, // C2
-      { f: 98.00,  gain: 0.22, harm: [1, 2, 3] },    // G2
-      { f: 130.81, gain: 0.26, harm: [1, 2, 3] },    // C3
+      { f: 65.41,  gain: 0.30, harm: [1, 2, 3, 4] },
+      { f: 98.00,  gain: 0.22, harm: [1, 2, 3] },
+      { f: 130.81, gain: 0.26, harm: [1, 2, 3] },
     ];
-
-    const attack  = 1.2;   // slow swell in
-    const sustain = 1.8;   // hold
-    const release = 1.8;   // slow fade
+    const attack  = 1.2;
+    const sustain = 1.8;
+    const release = 1.8;
     const total   = attack + sustain + release;
-
     voices.forEach((v) => {
       const gainNode = this.ctx.createGain();
       gainNode.gain.setValueAtTime(0, now);
       gainNode.gain.linearRampToValueAtTime(v.gain, now + attack);
       gainNode.gain.linearRampToValueAtTime(v.gain * 0.75, now + attack + sustain);
       gainNode.gain.exponentialRampToValueAtTime(0.0001, now + total);
-
-      // Lowpass to soften the organ stack so it feels warm, not thin
       const filter = this.ctx.createBiquadFilter();
       filter.type = 'lowpass';
       filter.frequency.setValueAtTime(800, now);
       filter.frequency.linearRampToValueAtTime(2400, now + attack);
       filter.Q.value = 0.3;
-
       gainNode.connect(filter);
       filter.connect(this.masterGain);
-
-      // Build organ-style harmonic stack for this voice
       v.harm.forEach((h, idx) => {
         const osc = this.ctx.createOscillator();
         osc.type = idx === 0 ? 'sine' : idx === 1 ? 'triangle' : 'sine';
         osc.frequency.value = v.f * h;
         const voiceGain = this.ctx.createGain();
-        // Each successive harmonic quieter
         voiceGain.gain.value = 1 / (h * h * 0.6);
         osc.connect(voiceGain);
         voiceGain.connect(gainNode);
@@ -537,10 +491,7 @@ const audio = {
         osc.stop(now + total + 0.1);
       });
     });
-
-    // High airy whisper on top — like the shimmer in Interstellar's
-    // "Cornfield Chase" or "No Time For Caution", kept very quiet.
-    const shimmerFreqs = [1046, 1568, 2093]; // C6, G6, C7
+    const shimmerFreqs = [1046, 1568, 2093];
     shimmerFreqs.forEach((f, i) => {
       const osc = this.ctx.createOscillator();
       const g = this.ctx.createGain();
@@ -557,29 +508,23 @@ const audio = {
     });
   },
 
-  // Bell pack START — Tibetan-style singing bowl. A single struck tone
-  // with rich inharmonic partials and very long decay. Contemplative.
   async _bellStart() {
     await this.init();
     await this.resume();
     const now = this.ctx.currentTime;
     const reverb = this.makeReverb();
-
-    // Fundamental + bell-like inharmonic partials (singing bowl ratios)
-    const fundamental = 220; // A3
+    const fundamental = 220;
     const partials = [
       { ratio: 1.0,   gain: 0.30 },
       { ratio: 2.76,  gain: 0.18 },
       { ratio: 5.40,  gain: 0.10 },
       { ratio: 8.93,  gain: 0.05 },
     ];
-
     partials.forEach((p, i) => {
       const osc = this.ctx.createOscillator();
       const g = this.ctx.createGain();
       osc.type = 'sine';
       osc.frequency.value = fundamental * p.ratio;
-      // Higher partials decay faster (acoustic realism)
       const decay = 4.5 / (i * 0.6 + 1);
       g.gain.setValueAtTime(0, now);
       g.gain.linearRampToValueAtTime(p.gain, now + 0.02);
@@ -590,12 +535,10 @@ const audio = {
       osc.start(now);
       osc.stop(now + decay + 0.1);
     });
-
-    // Soft low warmth underneath
     const sub = this.ctx.createOscillator();
     const sg = this.ctx.createGain();
     sub.type = 'sine';
-    sub.frequency.value = 110; // A2
+    sub.frequency.value = 110;
     sg.gain.setValueAtTime(0, now);
     sg.gain.linearRampToValueAtTime(0.10, now + 0.04);
     sg.gain.exponentialRampToValueAtTime(0.0001, now + 3);
@@ -605,7 +548,6 @@ const audio = {
     sub.stop(now + 3.1);
   },
 
-  // Pulse pack START — minimalist, single short tone. A modern marker.
   async _pulseStart() {
     await this.init();
     await this.resume();
@@ -623,18 +565,12 @@ const audio = {
     osc.stop(now + 0.3);
   },
 
-  // Rating sounds — distinct emotional register per star count.
-  // 1 = dull low thud, 5 = bright crystalline glass.
-  // These are shared across packs (they're emotional feedback, not ambient
-  // atmosphere), but the 'off' pack silences them too.
   async playRating(n) {
     if (settings.get('soundPack') === 'off') return;
     await this.init();
     await this.resume();
     const now = this.ctx.currentTime;
-
     if (n === 1) {
-      // Low muffled thud — disappointed
       const osc = this.ctx.createOscillator();
       const g = this.ctx.createGain();
       const filter = this.ctx.createBiquadFilter();
@@ -654,10 +590,8 @@ const audio = {
       osc.stop(now + 0.6);
       return;
     }
-
     if (n === 2) {
-      // Soft flat low tone
-      const freqs = [196, 294]; // G3 + D4 (perfect fifth, slightly dull)
+      const freqs = [196, 294];
       freqs.forEach((f, i) => {
         const osc = this.ctx.createOscillator();
         const g = this.ctx.createGain();
@@ -674,10 +608,8 @@ const audio = {
       });
       return;
     }
-
     if (n === 3) {
-      // Neutral mid chime — no emotion, just an acknowledgment
-      const freqs = [440, 554]; // A4 + C#5 (major third)
+      const freqs = [440, 554];
       freqs.forEach((f, i) => {
         const osc = this.ctx.createOscillator();
         const g = this.ctx.createGain();
@@ -694,11 +626,9 @@ const audio = {
       });
       return;
     }
-
     if (n === 4) {
-      // Warm major triad — pleasant
       const reverb = this.makeReverb();
-      const freqs = [523, 659, 784]; // C5, E5, G5
+      const freqs = [523, 659, 784];
       freqs.forEach((f, i) => {
         const osc = this.ctx.createOscillator();
         const g = this.ctx.createGain();
@@ -716,21 +646,10 @@ const audio = {
       });
       return;
     }
-
     if (n === 5) {
-      // Bright crystalline glass — uplifting, harmonic rich
       const reverb = this.makeReverb();
-      // C major arpeggio rising + high harmonic shimmer
-      const notes = [
-        [1046, 0.00], // C6
-        [1318, 0.06], // E6
-        [1568, 0.12], // G6
-        [2093, 0.20], // C7
-        [2637, 0.28], // E7
-        [3136, 0.36], // G7 — final bell
-      ];
+      const notes = [[1046, 0.00], [1318, 0.06], [1568, 0.12], [2093, 0.20], [2637, 0.28], [3136, 0.36]];
       notes.forEach(([f, delay]) => {
-        // Fundamental
         const osc = this.ctx.createOscillator();
         const g = this.ctx.createGain();
         osc.type = 'sine';
@@ -743,8 +662,6 @@ const audio = {
         g.connect(reverb.input);
         osc.start(now + delay);
         osc.stop(now + delay + 1.7);
-
-        // Harmonic shimmer — 2.0009 ratio gives a glass-like beat
         const harm = this.ctx.createOscillator();
         const hg = this.ctx.createGain();
         harm.type = 'sine';
@@ -761,7 +678,6 @@ const audio = {
     }
   },
 
-  // Zoom-out — played when a session pauses (tap or motion).
   async playZoomOut() {
     const pack = settings.get('soundPack');
     if (pack === 'off') return;
@@ -770,38 +686,29 @@ const audio = {
     return this._cosmosZoomOut();
   },
 
-  // Cosmos zoom-out: descending pitch glide with filter closing down.
-  // Feels like the UI retreating: sound pulls back with it.
   async _cosmosZoomOut() {
     await this.init();
     await this.resume();
     const now = this.ctx.currentTime;
     const dur = 0.9;
-
-    // Two detuned sine voices — an octave apart, both sliding down
     const voices = [
       { fStart: 880, fEnd: 220, gain: 0.16 },
       { fStart: 440, fEnd: 110, gain: 0.12 },
     ];
-
     voices.forEach((v) => {
       const osc = this.ctx.createOscillator();
       const g = this.ctx.createGain();
       const filter = this.ctx.createBiquadFilter();
-
       osc.type = 'sine';
       osc.frequency.setValueAtTime(v.fStart, now);
       osc.frequency.exponentialRampToValueAtTime(v.fEnd, now + dur);
-
       filter.type = 'lowpass';
       filter.frequency.setValueAtTime(3200, now);
       filter.frequency.exponentialRampToValueAtTime(400, now + dur);
       filter.Q.value = 0.7;
-
       g.gain.setValueAtTime(0, now);
       g.gain.linearRampToValueAtTime(v.gain, now + 0.04);
       g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
-
       osc.connect(filter);
       filter.connect(g);
       g.connect(this.masterGain);
@@ -810,7 +717,6 @@ const audio = {
     });
   },
 
-  // Bell zoom-out: muted struck tone with quick decay. The bowl is hushed.
   async _bellZoomOut() {
     await this.init();
     await this.resume();
@@ -834,7 +740,6 @@ const audio = {
     osc.stop(now + 0.75);
   },
 
-  // Pulse zoom-out: single short low click.
   async _pulseZoomOut() {
     await this.init();
     await this.resume();
@@ -852,7 +757,6 @@ const audio = {
     osc.stop(now + 0.15);
   },
 
-  // Zoom-in — played when a paused session resumes.
   async playZoomIn() {
     const pack = settings.get('soundPack');
     if (pack === 'off') return;
@@ -861,37 +765,29 @@ const audio = {
     return this._cosmosZoomIn();
   },
 
-  // Cosmos zoom-in: mirror of cosmos zoom-out, pitch rising, filter
-  // opening, volume arriving rather than leaving.
   async _cosmosZoomIn() {
     await this.init();
     await this.resume();
     const now = this.ctx.currentTime;
     const dur = 0.9;
-
     const voices = [
       { fStart: 220, fEnd: 880, gain: 0.16 },
       { fStart: 110, fEnd: 440, gain: 0.12 },
     ];
-
     voices.forEach((v) => {
       const osc = this.ctx.createOscillator();
       const g = this.ctx.createGain();
       const filter = this.ctx.createBiquadFilter();
-
       osc.type = 'sine';
       osc.frequency.setValueAtTime(v.fStart, now);
       osc.frequency.exponentialRampToValueAtTime(v.fEnd, now + dur);
-
       filter.type = 'lowpass';
       filter.frequency.setValueAtTime(400, now);
       filter.frequency.exponentialRampToValueAtTime(3200, now + dur);
       filter.Q.value = 0.7;
-
       g.gain.setValueAtTime(0, now);
       g.gain.linearRampToValueAtTime(v.gain, now + dur * 0.55);
       g.gain.exponentialRampToValueAtTime(0.0001, now + dur + 0.2);
-
       osc.connect(filter);
       filter.connect(g);
       g.connect(this.masterGain);
@@ -900,7 +796,6 @@ const audio = {
     });
   },
 
-  // Bell zoom-in: brief warm tone, the room gathering itself back.
   async _bellZoomIn() {
     await this.init();
     await this.resume();
@@ -919,7 +814,6 @@ const audio = {
     osc.stop(now + 0.9);
   },
 
-  // Pulse zoom-in: single short high click — a marker, mirror of zoom-out.
   async _pulseZoomIn() {
     await this.init();
     await this.resume();
@@ -967,14 +861,12 @@ const audio = {
     });
   },
 
-  // Bell pack FINISH — single struck bowl, longer than start, ascending
-  // partial decay so the room "breathes out".
   async _bellFinish() {
     await this.init();
     await this.resume();
     const now = this.ctx.currentTime;
     const reverb = this.makeReverb();
-    const fundamental = 196; // G3 — slightly lower than start, downward resolve
+    const fundamental = 196;
     const partials = [
       { ratio: 1.0,   gain: 0.32 },
       { ratio: 2.76,  gain: 0.20 },
@@ -998,7 +890,6 @@ const audio = {
     });
   },
 
-  // Pulse pack FINISH — two short ascending ticks, no reverb. Modern.
   async _pulseFinish() {
     await this.init();
     await this.resume();
@@ -1023,12 +914,7 @@ const audio = {
 // 7. Starfield — Steady Night canvas animation
 // ============================================================
 const stars = {
-  canvas: null,
-  ctx: null,
-  dots: [],
-  rafId: null,
-  running: false,
-
+  canvas: null, ctx: null, dots: [], rafId: null, running: false,
   init() {
     this.canvas = dom.nightSky;
     if (!this.canvas) return;
@@ -1037,7 +923,6 @@ const stars = {
     window.addEventListener('resize', () => this.resize());
     this.seed();
   },
-
   resize() {
     if (!this.canvas) return;
     const dpr = window.devicePixelRatio || 1;
@@ -1045,7 +930,6 @@ const stars = {
     this.canvas.height = window.innerHeight * dpr;
     this.ctx.scale(dpr, dpr);
   },
-
   seed() {
     const w = window.innerWidth;
     const h = window.innerHeight;
@@ -1053,8 +937,7 @@ const stars = {
     this.dots = [];
     for (let i = 0; i < count; i++) {
       this.dots.push({
-        x: Math.random() * w,
-        y: Math.random() * h,
+        x: Math.random() * w, y: Math.random() * h,
         r: Math.random() * 1.2 + 0.3,
         baseAlpha: Math.random() * 0.65 + 0.2,
         phase: Math.random() * Math.PI * 2,
@@ -1062,7 +945,6 @@ const stars = {
       });
     }
   },
-
   start() {
     if (this.running) return;
     this.running = true;
@@ -1076,14 +958,12 @@ const stars = {
     };
     this.rafId = requestAnimationFrame(tick);
   },
-
   stop() {
     this.running = false;
     if (this.rafId) cancelAnimationFrame(this.rafId);
     this.rafId = null;
     if (this.ctx) this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
   },
-
   draw(t, dt) {
     const w = window.innerWidth;
     const h = window.innerHeight;
@@ -1102,7 +982,7 @@ const stars = {
 };
 
 // ============================================================
-// 8. IndexedDB — session persistence
+// 8. IndexedDB
 // ============================================================
 const db = {
   _db: null,
@@ -1126,7 +1006,7 @@ const db = {
     return new Promise((resolve, reject) => {
       const tx = database.transaction('sessions', 'readwrite');
       const req = tx.objectStore('sessions').add(session);
-      req.onsuccess = () => resolve(req.result); // id
+      req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error);
     });
   },
@@ -1177,6 +1057,9 @@ async function startMic() {
     state.analyser.fftSize = 512;
     state.analyser.smoothingTimeConstant = 0.85;
     source.connect(state.analyser);
+    // Save the source so the STT tap (if enabled) can fan off it
+    // without us having to re-read the MediaStream.
+    state.micSourceNode = source;
     state.micEnabled = true;
     return true;
   } catch (e) {
@@ -1185,10 +1068,54 @@ async function startMic() {
   }
 }
 
+// Attach a ScriptProcessor to the existing mic source that pumps
+// raw samples into the whisper module. Called only when STT is on.
+//
+// We use ScriptProcessor instead of AudioWorklet for v1.0 because:
+//  (a) it works on iOS Safari without extra setup,
+//  (b) the deprecation hasn't shipped a removal date,
+//  (c) Whisper inference dwarfs the cost of one JS callback per
+//      4096 samples — main-thread cost is negligible by comparison.
+//
+// We pause the tap when the session pauses so we don't transcribe
+// the noise of the interruption.
+function attachSttTap() {
+  if (!state.audioCtx || !state.micSourceNode) return;
+  if (state.sttProcessor) return;
+  // 4096 = ~85ms @ 48kHz. Small enough to be responsive, large
+  // enough to keep callback overhead low.
+  const proc = state.audioCtx.createScriptProcessor(4096, 1, 1);
+  proc.onaudioprocess = (ev) => {
+    if (!state.voiceNotesEnabled) return;
+    if (state.paused) return;
+    const ch = ev.inputBuffer.getChannelData(0);
+    whisper.appendSamples(ch);
+  };
+  state.micSourceNode.connect(proc);
+  // ScriptProcessor only fires onaudioprocess if it has a downstream
+  // node. Connect through a muted gain so we don't make sound.
+  const sink = state.audioCtx.createGain();
+  sink.gain.value = 0;
+  proc.connect(sink);
+  sink.connect(state.audioCtx.destination);
+  state.sttProcessor = proc;
+  state.sttSink = sink;
+}
+
+function detachSttTap() {
+  if (state.sttProcessor) {
+    try { state.sttProcessor.disconnect(); } catch (_) {}
+    state.sttProcessor.onaudioprocess = null;
+    state.sttProcessor = null;
+  }
+  if (state.sttSink) {
+    try { state.sttSink.disconnect(); } catch (_) {}
+    state.sttSink = null;
+  }
+}
+
 function readMicLevel() {
   if (!state.analyser) return 0;
-  // Time-domain float data gives us true audio amplitude (-1..1).
-  // RMS over the buffer is a stable measure of loudness.
   const buf = new Float32Array(state.analyser.fftSize);
   state.analyser.getFloatTimeDomainData(buf);
   let sumSq = 0;
@@ -1196,7 +1123,7 @@ function readMicLevel() {
     sumSq += buf[i] * buf[i];
   }
   const rms = Math.sqrt(sumSq / buf.length);
-  return rms; // roughly 0..1
+  return rms;
 }
 
 // ============================================================
@@ -1331,7 +1258,6 @@ function enterPause(reason) {
   audio.playZoomOut();
   haptics.short();
 
-  // 3-min auto-end timeout
   state.pauseTimeoutId = setTimeout(() => {
     if (state.paused && state.running) {
       completeSession(false, 'pause-timeout');
@@ -1367,7 +1293,6 @@ function updateRing() {
   if (state.duration > 0) {
     progress = Math.min(state.elapsed / state.duration, 1);
   } else {
-    // Infinity — progress against the 60-minute cap
     progress = Math.min(state.elapsed / CONFIG.INFINITY_CAP_SECONDS, 1);
   }
   dom.ringProgress.style.strokeDashoffset = C * (1 - progress);
@@ -1417,13 +1342,34 @@ function pauseStatusText() {
   return base;
 }
 
+// STT status surface — overrides the "Listening for silence…" line
+// while the model is loading or unsupported. Never touches the pause
+// message; the pause path has priority.
+function updateSttStatus(s) {
+  if (!state.voiceNotesEnabled) return;
+  if (state.paused) return;
+  if (!dom.statusText) return;
+  if (s.state === 'loading') {
+    const pct = Math.round((s.progress || 0) * 100);
+    dom.statusText.textContent = pct > 0
+      ? `Loading voice notes… ${pct}%`
+      : 'Loading voice notes…';
+  } else if (s.state === 'unsupported') {
+    dom.statusText.textContent = 'Voice notes unsupported on this device';
+  } else if (s.state === 'ready') {
+    dom.statusText.textContent = 'Listening for silence…';
+  }
+}
+
+function clearSttStatus() {
+  // No-op placeholder — the next setRunningUI(false) will reset the
+  // status line. Kept for symmetry with updateSttStatus().
+}
+
 function sensingTick() {
   if (!state.running) return;
   const now = Date.now();
 
-  // Mic — sample only when not paused. A paused session's noise is the
-  // noise of an interruption (e.g. a phone call), not the ambient the
-  // user chose to sit with.
   if (state.micEnabled && !state.paused) {
     state.currentLevel = readMicLevel();
     const db = levelToDb(state.currentLevel);
@@ -1432,7 +1378,6 @@ function sensingTick() {
     if (db > state.dbPeak) state.dbPeak = db;
   }
 
-  // Motion — pauses if threshold sustained past grace
   if (state.motionEnabled) {
     const tooMoving = state.currentMotion > CONFIG.MOTION_THRESHOLD;
     if (tooMoving) {
@@ -1444,7 +1389,6 @@ function sensingTick() {
     if (motionPause && !state.paused) enterPause('motion');
   }
 
-  // Focus — pauses after grace (short blips for notifications don't count)
   if (document.hidden) {
     if (!state.focusLostSince) state.focusLostSince = now;
     const focusPause = (now - state.focusLostSince) > CONFIG.FOCUS_GRACE_MS;
@@ -1453,14 +1397,12 @@ function sensingTick() {
     state.focusLostSince = null;
   }
 
-  // Accumulate elapsed only when not paused
   if (!state.paused && state.lastTickAt) {
     const dt = (now - state.lastTickAt) / 1000;
     state.elapsed += dt;
   }
   state.lastTickAt = now;
 
-  // Steady night tracking — only accrues while not paused
   if (!state.paused) {
     if (!state.silenceContinuousSince) state.silenceContinuousSince = now;
     const silentFor = now - state.silenceContinuousSince;
@@ -1469,7 +1411,6 @@ function sensingTick() {
     }
   }
 
-  // Keep paused-status countdown fresh
   if (state.paused) {
     dom.statusText.textContent = pauseStatusText();
   }
@@ -1477,9 +1418,6 @@ function sensingTick() {
   updateDialTime();
   updateRing();
 
-  // Session end conditions:
-  // - Timer mode: elapsed hits the target duration
-  // - Infinity (duration 0): elapsed hits INFINITY_CAP_SECONDS, ends silently
   if (state.duration > 0 && state.elapsed >= state.duration) {
     completeSession(true, 'complete');
     return;
@@ -1495,19 +1433,13 @@ function sensingTick() {
 // ============================================================
 // 17. Session lifecycle
 // ============================================================
-// ============================================================
 // 17b. Voice notes — confirmation flow (Infinity mode only)
-// ============================================================
-// Resolves to true (transcribe) or false (don't).
-// Called from startSession() before Infinity runs. Non-Infinity modes
-// skip this entirely.
 function maybeAskVoiceNotes() {
   return new Promise((resolve) => {
     const pref = settings.get('voiceNotes');
     if (pref === 'on')  return resolve(true);
     if (pref === 'off') return resolve(false);
 
-    // 'ask' — show overlay
     if (!dom.vnConfirmOverlay) return resolve(false);
     dom.vnConfirmOverlay.hidden = false;
 
@@ -1517,11 +1449,7 @@ function maybeAskVoiceNotes() {
       dom.vnAlwaysOn.removeEventListener('click', onAlways);
       dom.vnNotThisTime.removeEventListener('click', onNo);
     };
-    const onYes = () => {
-      haptics.tap();
-      cleanup();
-      resolve(true);
-    };
+    const onYes = () => { haptics.tap(); cleanup(); resolve(true); };
     const onAlways = () => {
       haptics.tap();
       settings.set('voiceNotes', 'on');
@@ -1529,11 +1457,7 @@ function maybeAskVoiceNotes() {
       cleanup();
       resolve(true);
     };
-    const onNo = () => {
-      haptics.tap();
-      cleanup();
-      resolve(false);
-    };
+    const onNo = () => { haptics.tap(); cleanup(); resolve(false); };
 
     dom.vnYesSession.addEventListener('click', onYes);
     dom.vnAlwaysOn.addEventListener('click', onAlways);
@@ -1544,8 +1468,6 @@ function maybeAskVoiceNotes() {
 async function startSession() {
   if (state.running) return;
 
-  // Voice notes decision — Infinity only. Runs before mic/motion so the
-  // user can back out without us having grabbed sensors yet.
   state.voiceNotesEnabled = false;
   state.voiceNotesText    = '';
   if (state.mode === 'infinity') {
@@ -1556,7 +1478,24 @@ async function startSession() {
   if (!state.motionEnabled) await startMotion();
   await requestWakeLock();
 
-  // Reset all state
+  // STT (v1.0) — only spin up when the user opted in for this session.
+  // Preload triggers the model fetch if it isn't already cached. We don't
+  // block on it — the buffer fills with audio while the model loads, and
+  // the worker auto-loads on first transcribe call if it's late. Live
+  // status surfaces through the status text below the dial.
+  if (state.voiceNotesEnabled) {
+    whisper.preload((s) => updateSttStatus(s));
+    whisper.startSession(
+      state.audioCtx ? state.audioCtx.sampleRate : 48000,
+      (text) => {
+        state.voiceNotesText = state.voiceNotesText
+          ? (state.voiceNotesText + ' ' + text)
+          : text;
+      }
+    );
+    attachSttTap();
+  }
+
   state.running = true;
   state.paused  = false;
   state.startedAt = Date.now();
@@ -1585,8 +1524,6 @@ async function startSession() {
 async function completeSession(naturalFinish = false, reason = 'manual') {
   if (!state.running) return;
 
-  // Mark not-running IMMEDIATELY to prevent re-entry (e.g. pause-timeout
-  // firing while an awaited db.add() is in flight).
   state.running = false;
   state.paused  = false;
 
@@ -1595,6 +1532,16 @@ async function completeSession(naturalFinish = false, reason = 'manual') {
   if (state.pauseTimeoutId) {
     clearTimeout(state.pauseTimeoutId);
     state.pauseTimeoutId = null;
+  }
+
+  // STT — detach the audio tap so no more samples enter the buffer,
+  // then flush whatever's still in the buffer through the worker.
+  // We await endSession so the final transcript is in voiceNotesText
+  // before we save the session record.
+  if (state.voiceNotesEnabled) {
+    detachSttTap();
+    try { await whisper.endSession(); } catch (_) {}
+    clearSttStatus();
   }
 
   const avgDb  = state.dbSamples > 0 ? Math.round(state.dbSum / state.dbSamples) : null;
@@ -1613,11 +1560,9 @@ async function completeSession(naturalFinish = false, reason = 'manual') {
     pausedTotalSeconds: Math.round(state.pausedTotalMs / 1000),
     avgDb: avgDb,
     peakDb: peakDb,
-    rating: null,   // set later when user taps a star on the summary modal
+    rating: null,
   };
 
-  // Attach voice notes transcript only when present. v0.9 never writes
-  // non-empty text (no STT yet), so this is a no-op until v1.0.
   if (state.voiceNotesText && state.voiceNotesText.trim()) {
     session.voiceNotes = state.voiceNotesText.trim();
   }
@@ -1644,12 +1589,16 @@ async function completeSession(naturalFinish = false, reason = 'manual') {
   }
 }
 
-// A synchronous variant used in pagehide — best-effort, can't await
 function commitSessionOnUnload() {
   if (!state.running) return;
-  // Clean up timers
   if (state.sensingFrame) cancelAnimationFrame(state.sensingFrame);
   if (state.pauseTimeoutId) clearTimeout(state.pauseTimeoutId);
+  // STT — synchronously detach the tap. We don't try to await a final
+  // worker round-trip here; the browser is closing us. Whatever's
+  // already in voiceNotesText gets saved below.
+  if (state.voiceNotesEnabled) {
+    detachSttTap();
+  }
 
   const avgDb = state.dbSamples > 0 ? Math.round(state.dbSum / state.dbSamples) : null;
   const peakDb = state.dbSamples > 0 && isFinite(state.dbPeak) ? Math.round(state.dbPeak) : null;
@@ -1674,10 +1623,7 @@ function commitSessionOnUnload() {
     session.voiceNotes = state.voiceNotesText.trim();
   }
 
-  // Fire-and-forget save (browser may kill us before it completes; that's fine)
-  try {
-    db.add(session);
-  } catch (_) {}
+  try { db.add(session); } catch (_) {}
 
   state.running = false;
 }
@@ -1708,7 +1654,6 @@ function showSummary(session) {
   dom.summaryAvgDb.textContent  = session.avgDb  != null ? `${session.avgDb} dB`  : '—';
   dom.summaryPeakDb.textContent = session.peakDb != null ? `${session.peakDb} dB` : '—';
 
-  // Reset rating UI — fresh state for each session
   dom.ratingStars.classList.remove('submitted');
   dom.ratingStars.querySelectorAll('.rating-star').forEach(s => s.classList.remove('lit'));
   dom.ratingPrompt.textContent = 'How did it feel?';
@@ -1717,20 +1662,14 @@ function showSummary(session) {
   dom.summaryOverlay.hidden = false;
 }
 
-// Apply rating to the just-completed session and close the summary.
 async function submitRating(n) {
-  // Lit all stars up to n; mark the group as submitted
   dom.ratingStars.classList.add('submitted');
   const stars = dom.ratingStars.querySelectorAll('.rating-star');
-  stars.forEach((s, i) => {
-    s.classList.toggle('lit', i < n);
-  });
+  stars.forEach((s, i) => { s.classList.toggle('lit', i < n); });
 
-  // Play the rating sound + tactile feedback
   audio.playRating(n);
   haptics.tap();
 
-  // Acknowledge + update the stored session
   dom.ratingPrompt.textContent = 'Saved.';
   dom.ratingSkip.style.display = 'none';
 
@@ -1744,10 +1683,7 @@ async function submitRating(n) {
     } catch (e) { console.warn('[silence] rating save failed:', e); }
   }
 
-  // Close after a beat so the user hears the sound + sees the confirmation
-  setTimeout(() => {
-    dom.summaryOverlay.hidden = true;
-  }, 900);
+  setTimeout(() => { dom.summaryOverlay.hidden = true; }, 900);
 }
 
 // ============================================================
@@ -1784,8 +1720,6 @@ async function renderLog() {
     col.className = 'bar-col';
     col.dataset.ts = d.ts;
 
-    // Daily average rating — stars above the bar
-    // Only count sessions that actually have a rating (not null)
     const rated = d.sessions.filter(s => s.rating != null);
     let avgRating = 0;
     if (rated.length > 0) {
@@ -1837,7 +1771,6 @@ async function renderLog() {
     const dot = s.interrupted ? '<span class="log-interrupted-dot" title="Interrupted"></span>' : '';
     const dbLabel = (s.avgDb != null) ? `<span class="log-db">${s.avgDb} dB</span>` : '';
 
-    // Inline rating display — 5 mini-stars, filled up to s.rating
     let ratingHTML = '';
     if (s.rating != null) {
       ratingHTML = '<div class="log-entry-rating">';
@@ -1847,8 +1780,6 @@ async function renderLog() {
       ratingHTML += '</div>';
     }
 
-    // Voice notes badge — only when session has non-empty transcript.
-    // Uses session id for unique panel reference (data-vn-id).
     let vnBadge = '';
     let vnPanel = '';
     if (s.voiceNotes && s.id != null) {
@@ -1862,7 +1793,6 @@ async function renderLog() {
         </div>`;
     }
 
-    // Two-column layout: left = what + when + how loud, right = how long + how good
     html += `
       <div class="log-entry">
         <div class="log-mode-icon">${modeIconSVG(s.mode)}</div>
@@ -1884,14 +1814,11 @@ async function renderLog() {
 // ============================================================
 // 20. Wire — event handlers
 // ============================================================
-// Sync the settings UI (chips + toggle) to whatever's currently in storage.
-// Called at boot, when the log panel opens, and after every settings change.
 function applySettingsUI() {
   const pack    = settings.get('soundPack');
   const haptOn  = settings.get('haptics') === 'on';
   const vnMode  = settings.get('voiceNotes');
 
-  // Sound pack chips — mark the current one as selected
   if (dom.soundPackChips) {
     dom.soundPackChips.querySelectorAll('.settings-chip').forEach((chip) => {
       const isSelected = chip.dataset.pack === pack;
@@ -1900,7 +1827,6 @@ function applySettingsUI() {
     });
   }
 
-  // Voice notes chips — Always / Ask / Never
   if (dom.voiceNotesChips) {
     dom.voiceNotesChips.querySelectorAll('.settings-chip').forEach((chip) => {
       const isSelected = chip.dataset.vn === vnMode;
@@ -1909,13 +1835,10 @@ function applySettingsUI() {
     });
   }
 
-  // Haptics toggle — set aria-checked, CSS handles visual state
   if (dom.hapticsToggle) {
     dom.hapticsToggle.setAttribute('aria-checked', String(haptOn));
   }
 
-  // Hint — show which haptic backend will actually fire, so users know
-  // why they may not feel anything (e.g. desktop, or iOS Safari outside Telegram).
   if (dom.hapticsHint) {
     if (!haptOn) {
       dom.hapticsHint.textContent = 'Off';
@@ -1929,7 +1852,6 @@ function applySettingsUI() {
 }
 
 function wire() {
-  // Modes — only selectable when not running
   dom.modes.addEventListener('click', (e) => {
     const btn = e.target.closest('.mode');
     if (!btn || state.running) return;
@@ -1937,7 +1859,6 @@ function wire() {
     haptics.tap();
   });
 
-  // Start (dial or start button)
   const startHandler = async () => {
     if (state.running) return;
     await startSession();
@@ -1945,19 +1866,14 @@ function wire() {
   dom.dialBtn.addEventListener('click', startHandler);
   dom.startBtn.addEventListener('click', startHandler);
 
-  // Stop — respond to pointerdown directly (more reliable than click in
-  // environments where the window-level pointerdown listener might swallow
-  // the event, or on touch devices where click can be debounced).
   dom.stopBtn.addEventListener('pointerdown', (e) => {
     e.stopPropagation();
     completeSession(false, 'manual');
   });
   dom.stopBtn.addEventListener('click', (e) => {
-    // Fallback if pointerdown wasn't supported
     if (state.running) completeSession(false, 'manual');
   });
 
-  // Log open/close
   dom.logBtn.addEventListener('click', async () => {
     dom.logOverlay.hidden = false;
     applySettingsUI();
@@ -1965,7 +1881,6 @@ function wire() {
   });
   dom.logClose.addEventListener('click', () => { dom.logOverlay.hidden = true; });
 
-  // Rating — each star click plays its own sound and persists the rating.
   dom.ratingStars.addEventListener('click', (e) => {
     const btn = e.target.closest('.rating-star');
     if (!btn) return;
@@ -1974,7 +1889,6 @@ function wire() {
     if (!n || n < 1 || n > 5) return;
     submitRating(n);
   });
-  // Hover preview — light up stars up to the hovered one
   dom.ratingStars.addEventListener('mouseover', (e) => {
     if (dom.ratingStars.classList.contains('submitted')) return;
     const btn = e.target.closest('.rating-star');
@@ -1988,72 +1902,38 @@ function wire() {
     if (dom.ratingStars.classList.contains('submitted')) return;
     dom.ratingStars.querySelectorAll('.rating-star').forEach(s => s.classList.remove('lit'));
   });
-  // Skip — just close without rating
   dom.ratingSkip.addEventListener('click', () => {
     dom.summaryOverlay.hidden = true;
   });
 
-  // Tap interactions — v0.5:
-  //   Running + not paused: any tap pauses (except STOP button)
-  //   Running + paused: tap on dial resumes; other taps do nothing
-  //   Night active: first tap exits night (without pausing or resuming)
   window.addEventListener('pointerdown', (e) => {
     if (!state.running) return;
-    // STOP button has its own handler above; let it manage itself
     if (e.target.closest('#stopBtn')) return;
-
-    // Night mode: first pointer input exits night
-    if (state.night) {
-      exitNight();
-      return;
-    }
-
-    // If paused, only the dial resumes the session; other taps are ignored
+    if (state.night) { exitNight(); return; }
     if (state.paused) {
-      if (e.target.closest('#dial')) {
-        exitPause();
-      }
+      if (e.target.closest('#dial')) exitPause();
       return;
     }
-
-    // Running normally: any tap pauses
     enterPause('tap');
   }, { passive: true });
 
-  // Belt-and-suspenders: explicit listener on the Night layer itself.
-  // This covers desktop Chrome quirks where the window-level pointerdown
-  // might miss synthetic or trusted-only events targeted at the canvas.
-  dom.night.addEventListener('pointerdown', () => {
-    if (state.night) exitNight();
-  });
-  dom.night.addEventListener('click', () => {
-    if (state.night) exitNight();
-  });
-  dom.night.addEventListener('mousedown', () => {
-    if (state.night) exitNight();
-  });
+  dom.night.addEventListener('pointerdown', () => { if (state.night) exitNight(); });
+  dom.night.addEventListener('click',        () => { if (state.night) exitNight(); });
+  dom.night.addEventListener('mousedown',    () => { if (state.night) exitNight(); });
 
-  // Key input also exits night
-  window.addEventListener('keydown', () => {
-    if (state.night) exitNight();
-  });
+  window.addEventListener('keydown', () => { if (state.night) exitNight(); });
 
-  // Visibility -> focus-based pause + wake lock reacquire
   document.addEventListener('visibilitychange', async () => {
     if (!document.hidden) {
       if (state.running && !state.wakeLock) await requestWakeLock();
     }
-    // Pause triggers in sensingTick handle focus loss with grace period.
-    // But if the tab becomes hidden we also immediately fall out of night.
     if (document.hidden && state.night) exitNight();
   });
 
-  // Page close / tab close — best-effort save
   window.addEventListener('pagehide', () => {
     if (state.running) commitSessionOnUnload();
   });
 
-  // ----- Settings: sound pack chips
   if (dom.soundPackChips) {
     dom.soundPackChips.addEventListener('click', (e) => {
       const chip = e.target.closest('.settings-chip');
@@ -2063,24 +1943,19 @@ function wire() {
       settings.set('soundPack', pack);
       applySettingsUI();
       haptics.tap();
-      // Audible preview so the user immediately hears their choice.
-      // Skipped for 'off' — the silence IS the preview.
       if (pack !== 'off') audio.playZoomIn();
     });
   }
 
-  // ----- Settings: haptics toggle
   if (dom.hapticsToggle) {
     dom.hapticsToggle.addEventListener('click', () => {
       const next = settings.get('haptics') === 'on' ? 'off' : 'on';
       settings.set('haptics', next);
       applySettingsUI();
-      // If they just turned it ON, demonstrate. If OFF, no preview.
       if (next === 'on') haptics.tap();
     });
   }
 
-  // ----- Settings: voice notes chips (Always / Ask / Never)
   if (dom.voiceNotesChips) {
     dom.voiceNotesChips.addEventListener('click', (e) => {
       const chip = e.target.closest('.settings-chip');
@@ -2093,7 +1968,6 @@ function wire() {
     });
   }
 
-  // ----- Log list: voice notes expand/collapse + copy
   if (dom.logList) {
     dom.logList.addEventListener('click', (e) => {
       const toggle = e.target.closest('[data-vn-toggle]');
@@ -2128,7 +2002,6 @@ function wire() {
         };
         if (navigator.clipboard && navigator.clipboard.writeText) {
           navigator.clipboard.writeText(text).then(showCopied).catch(() => {
-            // Fallback for older WebViews
             try {
               const ta = document.createElement('textarea');
               ta.value = text;
