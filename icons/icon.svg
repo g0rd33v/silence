@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <radialGradient id="sky" cx="50%" cy="100%" r="110%">
+      <stop offset="0%" stop-color="#1a2240"/>
+      <stop offset="35%" stop-color="#141a33"/>
+      <stop offset="70%" stop-color="#0a0e1a"/>
+      <stop offset="100%" stop-color="#05070e"/>
+    </radialGradient>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#fff" stop-opacity="1"/>
+      <stop offset="15%" stop-color="#fff" stop-opacity=".7"/>
+      <stop offset="50%" stop-color="#fff" stop-opacity=".12"/>
+      <stop offset="100%" stop-color="#fff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" ry="112" fill="url(#sky)"/>
+  <!-- horizon suggestion -->
+  <ellipse cx="256" cy="560" rx="380" ry="130" fill="#1a2350" opacity=".5"/>
+  <!-- north star glow -->
+  <circle cx="340" cy="195" r="90" fill="url(#glow)"/>
+  <!-- star rays -->
+  <g stroke="#ffffff" stroke-linecap="round" opacity=".85">
+    <line x1="340" y1="130" x2="340" y2="260" stroke-width="2.5"/>
+    <line x1="275" y1="195" x2="405" y2="195" stroke-width="2.5"/>
+    <line x1="293" y1="148" x2="387" y2="242" stroke-width="1" opacity=".5"/>
+    <line x1="387" y1="148" x2="293" y2="242" stroke-width="1" opacity=".5"/>
+  </g>
+  <circle cx="340" cy="195" r="5" fill="#fff"/>
+
+  <!-- scatter stars -->
+  <g fill="#fff">
+    <circle cx="90" cy="150" r="1.5" opacity=".7"/>
+    <circle cx="150" cy="100" r="2" opacity=".9"/>
+    <circle cx="210" cy="180" r="1" opacity=".5"/>
+    <circle cx="130" cy="240" r="1.5" opacity=".8"/>
+    <circle cx="80" cy="310" r="1" opacity=".5"/>
+    <circle cx="180" cy="280" r="2.5" opacity=".95"/>
+    <circle cx="250" cy="140" r="1" opacity=".5"/>
+    <circle cx="440" cy="130" r="1" opacity=".5"/>
+    <circle cx="450" cy="270" r="1.5" opacity=".7"/>
+    <circle cx="400" cy="320" r="1" opacity=".5"/>
+    <circle cx="120" cy="340" r="2" opacity=".8"/>
+    <circle cx="280" cy="230" r="1" opacity=".4"/>
+    <circle cx="240" cy="330" r="1" opacity=".5"/>
+    <circle cx="380" cy="280" r="1.5" opacity=".7"/>
+    <circle cx="70" cy="220" r="1" opacity=".4"/>
+  </g>
+</svg>
