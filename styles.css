@@ -1204,3 +1204,131 @@ button:focus-visible {
   .dial-label { font-size: 26px; }
   .dial-time { font-size: 22px; }
 }
+
+/* ============================================================
+   Voice notes (v0.9) — confirmation overlay, settings row hint,
+   notebook icon in log entries, inline transcript expand.
+   v0.9 adds UI only; STT lands in v1.0.
+   ============================================================ */
+
+/* ---- Confirmation overlay (Infinity + setting === 'ask') ---- */
+.vn-card {
+  text-align: center;
+  max-width: 380px;
+}
+.vn-icon {
+  width: 56px;
+  height: 56px;
+  margin: 0 auto 16px;
+  border-radius: var(--radius);
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--c-6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--c-2);
+}
+.vn-card h2 { margin-bottom: 8px; }
+.vn-card .lead {
+  text-align: left;
+  margin-bottom: 22px;
+}
+.vn-card .primary-btn { margin-top: 4px; }
+.vn-card .ghost-btn { padding: 10px; }
+
+/* ---- Settings hint for voice notes row ---- */
+.settings-hint-vn {
+  margin-top: 2px;
+}
+
+/* ---- Notebook icon in log entry ---- */
+/* Rendered inside .log-meta when the session has voiceNotes text. */
+.log-vn-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  padding: 3px 8px 3px 6px;
+  border: 1px solid var(--c-6);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--c-3);
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  cursor: pointer;
+  align-self: flex-start;
+  -webkit-tap-highlight-color: transparent;
+  transition: color .15s var(--ease), border-color .15s var(--ease), background .15s var(--ease);
+}
+.log-vn-badge:hover {
+  color: var(--c-2);
+  border-color: var(--c-5);
+  background: rgba(255,255,255,0.02);
+}
+.log-vn-badge svg {
+  width: 11px;
+  height: 11px;
+  flex-shrink: 0;
+}
+.log-vn-badge.expanded {
+  color: var(--c-1);
+  border-color: var(--c-3);
+  background: rgba(255,255,255,0.04);
+}
+
+/* ---- Expanded transcript panel ---- */
+/* Lives as a sibling row below the .log-entry it belongs to.
+   Grid: full-width, indented to align with the meta column. */
+.log-vn-panel {
+  margin: -4px 14px 8px 42px;   /* 42px L indent aligns with .log-meta col */
+  padding: 12px 14px;
+  background: rgba(255,255,255,0.02);
+  border: 1px solid var(--c-6);
+  border-radius: var(--radius-sm);
+  animation: vnPanelIn .2s var(--ease-out);
+}
+@keyframes vnPanelIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.log-vn-text {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--c-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0 0 10px;
+}
+.log-vn-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+.log-vn-copy {
+  background: transparent;
+  border: 1px solid var(--c-6);
+  color: var(--c-3);
+  padding: 5px 11px;
+  border-radius: 999px;
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: color .15s var(--ease), border-color .15s var(--ease), background .15s var(--ease);
+  -webkit-tap-highlight-color: transparent;
+}
+.log-vn-copy:hover {
+  color: var(--c-1);
+  border-color: var(--c-3);
+}
+.log-vn-copy.copied {
+  color: var(--c-1);
+  border-color: var(--c-2);
+  background: rgba(255,255,255,0.05);
+}
+
+/* ---- End voice notes ---- */
