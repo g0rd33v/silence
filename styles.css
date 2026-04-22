@@ -1,22 +1,36 @@
 /* ============================================================
-   Silence · styles
-   Matches the mockup: charcoal textile backdrop, recessed
-   metallic dial, bold tracked SILENCE, monochrome.
+   Silence · v0.3 styles
+   ------------------------------------------------------------
+   Design direction: refined minimalism, one object in focus,
+   generous negative space, monochrome discipline. The UI's job
+   is to disappear.
+
+   Type scale locked to: 11 · 13 · 15 · 17 · 22 · 30 · 32
+   Spacing on 4px grid: 4 · 8 · 12 · 16 · 20 · 24 · 32 · 48
    ============================================================ */
 
 :root {
-  --ink:        #e8e8e8;
-  --ink-dim:   rgba(232, 232, 232, 0.55);
-  --ink-mute:  rgba(232, 232, 232, 0.32);
-  --ink-soft:  rgba(232, 232, 232, 0.14);
-  --hairline:  rgba(232, 232, 232, 0.09);
+  /* Tones — monochrome, carefully stepped */
+  --c-0:   #ffffff;
+  --c-1:   #f1f1f1;
+  --c-2:   rgba(241, 241, 241, 0.70);
+  --c-3:   rgba(241, 241, 241, 0.48);
+  --c-4:   rgba(241, 241, 241, 0.28);
+  --c-5:   rgba(241, 241, 241, 0.14);
+  --c-6:   rgba(241, 241, 241, 0.08);
 
-  --bg:        #0a0a0a;
-  --bg-deep:   #050505;
+  --bg:        #060606;
+  --bg-deep:   #020202;
 
-  --radius:    14px;
+  --warm:      rgba(255, 210, 140, 0.65);
+
+  --radius-sm: 8px;
+  --radius:    12px;
+  --radius-lg: 18px;
+
   --ease:      cubic-bezier(.4, 0, .2, 1);
   --ease-out:  cubic-bezier(.16, 1, .3, 1);
+  --ease-in:   cubic-bezier(.7, 0, .84, 0);
 
   --safe-top: env(safe-area-inset-top);
   --safe-bot: env(safe-area-inset-bottom);
@@ -26,10 +40,14 @@
 
 html, body {
   background: var(--bg-deep);
-  color: var(--ink);
+  color: var(--c-1);
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  font-feature-settings: 'ss01', 'cv11';
   -webkit-font-smoothing: antialiased;
-  font-size: 16px;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  font-size: 15px;
+  line-height: 1.5;
   min-height: 100vh;
   min-height: 100dvh;
   overflow-x: hidden;
@@ -38,34 +56,33 @@ html, body {
   -webkit-tap-highlight-color: transparent;
 }
 
+/* Global [hidden] override — wins against display:flex on overlays */
+[hidden] { display: none !important; }
+
 /* ------------------------------------------------------------
-   Charcoal textile backdrop.
-   Built from layered radial + noise-like SVG pattern baked in.
+   Charcoal textile backdrop
    ------------------------------------------------------------ */
 body {
   background:
-    /* center lift */
-    radial-gradient(ellipse 130% 90% at 50% 40%, rgba(255,255,255,.025) 0%, transparent 55%),
-    /* outer darkening */
-    radial-gradient(ellipse 120% 110% at 50% 50%, #0e0e0e 0%, #080808 55%, #030303 100%),
-    #050505;
+    radial-gradient(ellipse 130% 95% at 50% 42%, rgba(255,255,255,.028) 0%, transparent 55%),
+    radial-gradient(ellipse 120% 110% at 50% 50%, #0d0d0d 0%, #070707 55%, #020202 100%),
+    #040404;
   position: relative;
 }
 
-/* Fabric/canvas grain overlay */
+/* Grain + weave overlay */
 body::before {
   content: '';
   position: fixed;
   inset: 0;
   z-index: 0;
   pointer-events: none;
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240' viewBox='0 0 240 240'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch' seed='5'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.35 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)' opacity='0.6'/></svg>");
-  background-size: 240px 240px;
-  opacity: 0.18;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='220' height='220' viewBox='0 0 220 220'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch' seed='7'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.4 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)' opacity='0.65'/></svg>");
+  background-size: 220px 220px;
+  opacity: 0.22;
   mix-blend-mode: overlay;
 }
 
-/* Second grain layer — finer, for canvas weave */
 body::after {
   content: '';
   position: fixed;
@@ -73,9 +90,46 @@ body::after {
   z-index: 0;
   pointer-events: none;
   background-image:
-    repeating-linear-gradient(0deg, rgba(255,255,255,0.012) 0px, rgba(255,255,255,0.012) 1px, transparent 1px, transparent 3px),
-    repeating-linear-gradient(90deg, rgba(0,0,0,0.04) 0px, rgba(0,0,0,0.04) 1px, transparent 1px, transparent 3px);
-  opacity: 0.7;
+    repeating-linear-gradient(0deg, rgba(255,255,255,0.016) 0px, rgba(255,255,255,0.016) 1px, transparent 1px, transparent 2.5px),
+    repeating-linear-gradient(90deg, rgba(0,0,0,0.06) 0px, rgba(0,0,0,0.06) 1px, transparent 1px, transparent 2.5px);
+  opacity: 0.8;
+}
+
+/* ============================================================
+   Steady Night (idle state)
+   ============================================================ */
+.night {
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  background: #000;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 3.5s var(--ease-out), visibility 3.5s var(--ease-out);
+}
+
+.night.active {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transition: opacity 3.5s var(--ease-out), visibility 0s;
+}
+
+.night-sky {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* When night is active, fade main UI away */
+.app {
+  transition: opacity 3.5s var(--ease-out);
+}
+body.night-active .app {
+  opacity: 0;
+  pointer-events: none;
 }
 
 /* ============================================================
@@ -86,7 +140,7 @@ body::after {
   z-index: 1;
   max-width: 440px;
   margin: 0 auto;
-  padding: calc(var(--safe-top) + 14px) 28px calc(var(--safe-bot) + 28px);
+  padding: calc(var(--safe-top) + 12px) 28px calc(var(--safe-bot) + 24px);
   min-height: 100vh;
   min-height: 100dvh;
   display: flex;
@@ -94,7 +148,7 @@ body::after {
 }
 
 /* ------------------------------------------------------------
-   Header: centered wordmark, icon right
+   Header
    ------------------------------------------------------------ */
 .top {
   display: grid;
@@ -109,49 +163,49 @@ body::after {
   text-align: center;
   font-size: 17px;
   font-weight: 400;
-  letter-spacing: 0.02em;
-  color: var(--ink-dim);
+  letter-spacing: 0.01em;
+  color: var(--c-2);
 }
 
 .icon-btn {
   background: transparent;
   border: none;
-  color: var(--ink-mute);
+  color: var(--c-3);
   padding: 9px;
   cursor: pointer;
   transition: color .2s var(--ease);
   justify-self: end;
+  border-radius: var(--radius-sm);
 }
-.icon-btn:hover, .icon-btn:active { color: var(--ink); }
+.icon-btn:hover, .icon-btn:active { color: var(--c-1); }
 
 /* ------------------------------------------------------------
    Tagline
    ------------------------------------------------------------ */
 .tagline {
   text-align: center;
-  color: var(--ink-dim);
+  color: var(--c-2);
   font-weight: 400;
   font-size: 17px;
-  letter-spacing: 0.005em;
-  margin: 32px 0 38px;
+  letter-spacing: 0.003em;
+  margin: 28px 0 36px;
 }
 
 /* ============================================================
-   Modes row — with vertical hairlines between cells
+   Modes row
    ============================================================ */
 .modes {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
   position: relative;
   padding: 16px 0 0;
-  border-top: 1px solid var(--hairline);
+  border-top: 1px solid var(--c-6);
 }
 
-/* vertical dividers — rendered with pseudo-elements on each cell except last */
 .mode {
   background: transparent;
   border: none;
-  color: var(--ink-dim);
+  color: var(--c-3);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -160,7 +214,7 @@ body::after {
   cursor: pointer;
   font-family: inherit;
   position: relative;
-  transition: color .25s var(--ease);
+  transition: color .22s var(--ease);
 }
 .mode + .mode::before {
   content: '';
@@ -169,7 +223,7 @@ body::after {
   top: 6px;
   bottom: 6px;
   width: 1px;
-  background: var(--hairline);
+  background: var(--c-6);
 }
 
 .mode-label {
@@ -181,8 +235,9 @@ body::after {
 
 .mode-icon {
   display: inline-flex;
-  color: var(--ink);
+  color: var(--c-1);
   opacity: .85;
+  transition: opacity .22s var(--ease);
 }
 
 .mode-time {
@@ -192,41 +247,32 @@ body::after {
   padding-top: 14px;
   width: 72%;
   text-align: center;
-  border-top: 1px solid var(--hairline);
-  color: var(--ink);
+  border-top: 1px solid var(--c-6);
+  color: var(--c-2);
   min-height: 32px;
   display: flex;
   align-items: center;
   justify-content: center;
+  transition: color .22s var(--ease), border-color .22s var(--ease);
 }
 
 .mode-time-circle {
-  color: var(--ink-mute);
+  color: var(--c-3);
 }
 
-.mode[aria-pressed="true"] .mode-label {
-  color: var(--ink);
-}
-.mode[aria-pressed="true"] .mode-time {
-  color: var(--ink);
-}
-.mode[aria-pressed="true"] .mode-icon {
-  opacity: 1;
-}
-
-.mode:not([aria-pressed="true"]) .mode-time {
-  color: var(--ink-dim);
-}
+.mode[aria-pressed="true"] .mode-label { color: var(--c-1); }
+.mode[aria-pressed="true"] .mode-time  { color: var(--c-1); border-top-color: var(--c-5); }
+.mode[aria-pressed="true"] .mode-icon  { opacity: 1; }
 
 /* ============================================================
-   Dial — the recessed metallic knob
+   Dial — refined bezel, deeper groove
    ============================================================ */
 .dial-wrap {
   flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 54px 0 20px;
+  padding: 48px 0 16px;
   min-height: 320px;
 }
 
@@ -234,47 +280,42 @@ body::after {
   position: relative;
   width: min(74vw, 320px);
   aspect-ratio: 1;
-  /* Outer shadow grounding the knob into the fabric */
-  filter: drop-shadow(0 18px 30px rgba(0,0,0,.7));
+  filter: drop-shadow(0 22px 36px rgba(0,0,0,.72));
 }
 
-/* Bezel — multiple layered backgrounds build a metallic recessed ring */
+/* Outer metallic ring — top highlight + bottom shadow */
 .dial::before {
-  /* Outer metal ring */
   content: '';
   position: absolute;
   inset: 0;
   border-radius: 50%;
   background:
-    /* Top highlight */
-    radial-gradient(ellipse 90% 55% at 50% 0%, rgba(255,255,255,0.18) 0%, rgba(255,255,255,0.04) 30%, transparent 55%),
-    /* Bottom shadow */
-    radial-gradient(ellipse 90% 55% at 50% 100%, rgba(0,0,0,0.8) 0%, rgba(0,0,0,0.3) 30%, transparent 60%),
-    /* Base metal */
+    radial-gradient(ellipse 95% 58% at 50% 0%, rgba(255,255,255,0.22) 0%, rgba(255,255,255,0.05) 28%, transparent 56%),
+    radial-gradient(ellipse 95% 58% at 50% 100%, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.35) 28%, transparent 60%),
     conic-gradient(from 180deg at 50% 50%,
-      #2a2a2a 0deg, #1a1a1a 60deg, #0c0c0c 180deg, #1a1a1a 300deg, #2a2a2a 360deg);
+      #2e2e2e 0deg, #1a1a1a 55deg, #0a0a0a 180deg, #1a1a1a 305deg, #2e2e2e 360deg);
   box-shadow:
-    inset 0 2px 2px rgba(255,255,255,.08),
-    inset 0 -3px 6px rgba(0,0,0,.7),
+    inset 0 2px 2px rgba(255,255,255,.10),
+    inset 0 -3px 6px rgba(0,0,0,.80),
     0 1px 0 rgba(255,255,255,.04);
 }
 
-/* Inner bezel lip — second ring slightly inset, creates the double-ridge effect */
+/* Inner bezel — double ridge groove */
 .dial::after {
   content: '';
   position: absolute;
-  inset: 5.5%;
+  inset: 5%;
   border-radius: 50%;
   background:
-    radial-gradient(ellipse 90% 55% at 50% 0%, rgba(255,255,255,0.08) 0%, transparent 45%),
-    radial-gradient(ellipse 90% 55% at 50% 100%, rgba(0,0,0,0.7) 0%, transparent 55%),
-    #0a0a0a;
+    radial-gradient(ellipse 90% 55% at 50% 0%, rgba(255,255,255,0.10) 0%, transparent 45%),
+    radial-gradient(ellipse 90% 55% at 50% 100%, rgba(0,0,0,0.75) 0%, transparent 55%),
+    #080808;
   box-shadow:
-    inset 0 2px 3px rgba(0,0,0,.8),
-    inset 0 -1px 1px rgba(255,255,255,.04);
+    inset 0 3px 5px rgba(0,0,0,.90),
+    inset 0 -1px 2px rgba(255,255,255,.05),
+    0 0 0 1px rgba(0,0,0,.3);
 }
 
-/* Progress ring sits between bezel layers and the inner face */
 .ring {
   position: absolute;
   inset: 0;
@@ -284,23 +325,23 @@ body::after {
 
 .ring-progress {
   fill: none;
-  stroke: rgba(255,255,255,.22);
-  stroke-width: 1.2;
+  stroke: rgba(255,255,255,.25);
+  stroke-width: 1.4;
   stroke-linecap: round;
-  stroke-dasharray: 540.354; /* 2π·86 */
+  stroke-dasharray: 540.354;
   stroke-dashoffset: 540.354;
   transition: stroke-dashoffset 0.8s var(--ease), stroke 0.3s var(--ease);
 }
 
-/* Inner face — the darker disc where text sits */
+/* Inner face */
 .dial-btn {
   position: absolute;
-  inset: 11%;
+  inset: 11.5%;
   z-index: 3;
   border-radius: 50%;
   background:
-    radial-gradient(circle at 35% 30%, rgba(255,255,255,0.04) 0%, transparent 45%),
-    radial-gradient(circle at 50% 50%, #131313 0%, #0a0a0a 55%, #050505 100%);
+    radial-gradient(circle at 35% 28%, rgba(255,255,255,0.05) 0%, transparent 42%),
+    radial-gradient(circle at 50% 50%, #141414 0%, #0a0a0a 55%, #040404 100%);
   border: none;
   cursor: pointer;
   display: flex;
@@ -308,23 +349,23 @@ body::after {
   align-items: center;
   justify-content: center;
   font-family: inherit;
-  color: var(--ink);
+  color: var(--c-1);
   -webkit-tap-highlight-color: transparent;
   transition: transform 0.15s var(--ease);
   box-shadow:
-    inset 0 2px 4px rgba(0,0,0,.9),
-    inset 0 -1px 2px rgba(255,255,255,.03);
+    inset 0 3px 5px rgba(0,0,0,.95),
+    inset 0 -1px 2px rgba(255,255,255,.035);
+  overflow: hidden;
 }
 
-/* Fabric/grain texture inside the inner face — very subtle */
 .dial-btn::before {
   content: '';
   position: absolute;
   inset: 0;
   border-radius: 50%;
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200' viewBox='0 0 200 200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='1.5' numOctaves='2' stitchTiles='stitch' seed='3'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.5 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)' opacity='0.4'/></svg>");
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200' viewBox='0 0 200 200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='1.8' numOctaves='2' stitchTiles='stitch' seed='4'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.45 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)' opacity='0.45'/></svg>");
   background-size: 180px 180px;
-  opacity: 0.22;
+  opacity: 0.28;
   mix-blend-mode: overlay;
   pointer-events: none;
 }
@@ -336,9 +377,10 @@ body::after {
 .dial-label {
   font-size: 30px;
   font-weight: 700;
-  letter-spacing: 0.18em;
-  color: var(--ink);
+  letter-spacing: 0.20em;
+  color: var(--c-1);
   margin-bottom: 16px;
+  margin-left: 0.20em;
   position: relative;
   z-index: 1;
 }
@@ -346,7 +388,7 @@ body::after {
 .dial-divider {
   width: 48px;
   height: 1px;
-  background: rgba(255,255,255,.18);
+  background: rgba(255,255,255,.22);
   margin-bottom: 14px;
   position: relative;
   z-index: 1;
@@ -356,19 +398,25 @@ body::after {
   font-size: 26px;
   font-weight: 400;
   letter-spacing: 0.01em;
-  color: var(--ink-dim);
+  color: var(--c-2);
   font-variant-numeric: tabular-nums;
   position: relative;
   z-index: 1;
 }
 
-/* Running / paused states */
-.dial.running .dial-time { color: var(--ink); }
-.dial.paused .ring-progress { stroke: rgba(255, 210, 120, 0.45); }
-.dial.paused .dial-label { color: rgba(255, 210, 120, 0.8); letter-spacing: 0.18em; }
+/* Running / paused */
+.dial.running .dial-time { color: var(--c-1); }
+.dial.starting { animation: dialPulse 2.5s var(--ease-out); }
+@keyframes dialPulse {
+  0%   { transform: scale(1); }
+  15%  { transform: scale(1.015); }
+  100% { transform: scale(1); }
+}
+.dial.paused .ring-progress { stroke: var(--warm); }
+.dial.paused .dial-label { color: var(--warm); }
 
 /* ============================================================
-   Status strip
+   Status
    ============================================================ */
 .status {
   display: flex;
@@ -377,7 +425,7 @@ body::after {
   gap: 10px;
   padding: 18px 0 4px;
   font-size: 12px;
-  color: var(--ink-mute);
+  color: var(--c-3);
   letter-spacing: 0.03em;
   min-height: 28px;
 }
@@ -392,8 +440,8 @@ body::after {
 }
 
 .status.paused .status-dot {
-  background: rgba(255, 210, 120, .85);
-  box-shadow: 0 0 7px rgba(255, 210, 120, .5);
+  background: var(--warm);
+  box-shadow: 0 0 7px rgba(255, 210, 140, .5);
   animation: none;
 }
 
@@ -403,10 +451,10 @@ body::after {
 }
 
 /* ============================================================
-   Action buttons (START / STOP pill)
+   Action buttons
    ============================================================ */
 .actions {
-  padding: 32px 0 4px;
+  padding: 28px 0 4px;
   display: flex;
   justify-content: center;
   min-height: 64px;
@@ -414,55 +462,52 @@ body::after {
 
 .action-btn {
   background: transparent;
-  border: 1px solid var(--ink-soft);
-  color: var(--ink);
+  border: 1px solid var(--c-5);
+  color: var(--c-1);
   font-family: inherit;
   font-size: 13px;
   font-weight: 500;
   letter-spacing: 0.22em;
   padding: 16px 58px;
+  padding-left: calc(58px + 0.22em);
   border-radius: 12px;
   cursor: pointer;
   transition: all .2s var(--ease);
-  min-width: 180px;
+  min-width: 200px;
 }
 .action-btn:hover, .action-btn:active {
-  border-color: rgba(232,232,232,.25);
-  color: var(--ink);
-  background: rgba(255,255,255,.02);
+  border-color: var(--c-4);
+  background: rgba(255,255,255,.025);
 }
+.action-btn:active { transform: scale(.985); }
 
 /* ============================================================
-   Overlay (permissions, history)
+   Overlay base (permission + log)
    ============================================================ */
-
-/* Ensure [hidden] overrides display rules for overlays + toast */
-[hidden] { display: none !important; }
-
 .overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.82);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
+  background: rgba(0, 0, 0, 0.86);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
   z-index: 100;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 24px;
-  padding-top: calc(var(--safe-top) + 24px);
-  padding-bottom: calc(var(--safe-bot) + 24px);
+  padding: 20px;
+  padding-top: calc(var(--safe-top) + 20px);
+  padding-bottom: calc(var(--safe-bot) + 20px);
   animation: fadeIn .3s var(--ease-out);
 }
 
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
 .overlay-card {
-  background: #0c0c0c;
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius);
+  background: #0b0b0b;
+  border: 1px solid var(--c-6);
+  border-radius: var(--radius-lg);
   padding: 28px 24px;
-  max-width: 420px;
+  max-width: 440px;
   width: 100%;
   max-height: 100%;
   overflow-y: auto;
@@ -476,13 +521,13 @@ body::after {
 
 .overlay-card h2 {
   font-size: 22px;
-  font-weight: 500;
+  font-weight: 600;
   letter-spacing: -0.015em;
-  margin-bottom: 6px;
+  margin-bottom: 4px;
 }
 
 .overlay-card .lead {
-  color: var(--ink-dim);
+  color: var(--c-2);
   font-size: 14px;
   line-height: 1.55;
   margin-bottom: 24px;
@@ -493,24 +538,24 @@ body::after {
   grid-template-columns: 40px 1fr;
   gap: 14px;
   padding: 16px 0;
-  border-top: 1px solid var(--hairline);
+  border-top: 1px solid var(--c-6);
   align-items: start;
 }
 .perm-row:last-of-type {
-  border-bottom: 1px solid var(--hairline);
+  border-bottom: 1px solid var(--c-6);
   margin-bottom: 24px;
 }
 
 .perm-icon {
   width: 40px;
   height: 40px;
-  border-radius: 10px;
+  border-radius: var(--radius-sm);
   background: rgba(255,255,255,0.03);
-  border: 1px solid var(--hairline);
+  border: 1px solid var(--c-6);
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--ink-dim);
+  color: var(--c-2);
 }
 
 .perm-text h3 {
@@ -522,33 +567,34 @@ body::after {
 
 .perm-text p {
   font-size: 13px;
-  color: var(--ink-mute);
+  color: var(--c-3);
   line-height: 1.5;
 }
 
 .primary-btn {
   display: block;
   width: 100%;
-  background: #fff;
+  background: var(--c-1);
   color: #000;
   border: none;
   font-family: inherit;
   font-size: 14px;
-  font-weight: 500;
-  letter-spacing: 0.02em;
+  font-weight: 600;
+  letter-spacing: 0.01em;
   padding: 15px;
-  border-radius: 12px;
+  border-radius: var(--radius);
   cursor: pointer;
-  margin-bottom: 10px;
-  transition: opacity .2s var(--ease);
+  margin-bottom: 8px;
+  transition: opacity .2s var(--ease), transform .15s var(--ease);
 }
-.primary-btn:hover { opacity: .88; }
+.primary-btn:hover { opacity: .90; }
+.primary-btn:active { transform: scale(.99); }
 
 .ghost-btn {
   display: block;
   width: 100%;
   background: transparent;
-  color: var(--ink-mute);
+  color: var(--c-3);
   border: none;
   font-family: inherit;
   font-size: 13px;
@@ -556,98 +602,202 @@ body::after {
   cursor: pointer;
   transition: color .2s var(--ease);
 }
-.ghost-btn:hover { color: var(--ink-dim); }
+.ghost-btn:hover { color: var(--c-2); }
 
 /* ============================================================
-   History panel
+   Silence Log
    ============================================================ */
-.history-card { max-width: 480px; }
+.log-card {
+  max-width: 480px;
+  padding: 24px 22px 22px;
+}
 
-.history-header {
+.log-header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
-  margin-bottom: 24px;
-}
-
-.history-totals {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 16px;
-  padding: 20px 0;
-  border-top: 1px solid var(--hairline);
-  border-bottom: 1px solid var(--hairline);
-  margin-bottom: 28px;
-}
-
-.history-totals > div {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-}
-
-.h-value {
-  font-size: 22px;
-  font-weight: 400;
-  letter-spacing: -0.015em;
-  color: var(--ink);
-  font-variant-numeric: tabular-nums;
-}
-
-.h-label {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-  color: var(--ink-mute);
-}
-
-.chart {
-  display: grid;
-  grid-template-columns: repeat(7, 1fr);
-  gap: 8px;
-  height: 180px;
-  padding: 0 4px;
-  align-items: end;
+  align-items: flex-start;
   margin-bottom: 22px;
+}
+
+.log-header h2 { margin-bottom: 2px; }
+
+.log-sub {
+  font-size: 12px;
+  color: var(--c-3);
+  letter-spacing: 0.01em;
+}
+
+/* 10-day chart */
+.log-chart {
+  display: grid;
+  grid-template-columns: repeat(10, 1fr);
+  gap: 5px;
+  height: 96px;
+  padding: 4px 0;
+  align-items: end;
+  margin-bottom: 10px;
 }
 
 .bar-col {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   height: 100%;
+  cursor: pointer;
+  padding-top: 4px;
 }
 
 .bar {
   width: 100%;
-  max-width: 32px;
   min-height: 2px;
-  background: rgba(255,255,255,.04);
+  background: var(--c-6);
   border-radius: 3px;
-  display: flex;
-  flex-direction: column-reverse;
-  overflow: hidden;
   flex: 1;
   position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column-reverse;
+  transition: background .2s var(--ease);
 }
 
-.bar-seg { width: 100%; border-top: 1px solid rgba(0,0,0,.3); }
-.bar-seg.before    { background: rgba(255,255,255,.18); }
-.bar-seg.after     { background: rgba(255,255,255,.30); }
-.bar-seg.unwind    { background: rgba(255,255,255,.45); }
-.bar-seg.sleep     { background: rgba(255,255,255,.62); }
-.bar-seg.infinity  { background: rgba(255,255,255,.80); }
+.bar-fill {
+  width: 100%;
+  background: linear-gradient(180deg, var(--c-2) 0%, var(--c-3) 100%);
+  border-radius: 3px;
+  transition: height .4s var(--ease);
+}
 
-.bar-day { font-size: 10px; color: var(--ink-mute); letter-spacing: 0.05em; }
-.bar-day.today { color: var(--ink); }
+.bar-col:hover .bar { background: var(--c-5); }
+.bar-col.active .bar-fill { background: linear-gradient(180deg, var(--c-1) 0%, var(--c-2) 100%); }
 
-.history-note {
-  font-size: 12px;
-  color: var(--ink-mute);
+.bar-day {
+  font-size: 10px;
+  color: var(--c-4);
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+}
+.bar-day.today { color: var(--c-1); }
+
+/* Totals row */
+.log-totals {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  padding: 16px 0 18px;
+  border-top: 1px solid var(--c-6);
+  border-bottom: 1px solid var(--c-6);
+  margin: 8px 0 18px;
+}
+
+.log-totals > div {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+}
+
+.t-value {
+  font-size: 20px;
+  font-weight: 500;
+  letter-spacing: -0.015em;
+  color: var(--c-1);
+  font-variant-numeric: tabular-nums;
+}
+
+.t-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--c-3);
+}
+
+/* Session list */
+.log-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin-bottom: 18px;
+  max-height: 280px;
+  overflow-y: auto;
+  /* Subtle fade at edges */
+  mask-image: linear-gradient(to bottom, transparent 0%, black 8px, black calc(100% - 8px), transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 8px, black calc(100% - 8px), transparent 100%);
+}
+
+.log-day {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  color: var(--c-4);
+  padding: 14px 2px 8px;
+  border-bottom: 1px solid var(--c-6);
+  margin-bottom: 4px;
+}
+.log-day:first-child { padding-top: 4px; }
+
+.log-entry {
+  display: grid;
+  grid-template-columns: 28px 1fr auto;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 2px;
+  transition: background .15s var(--ease);
+  border-radius: 6px;
+}
+
+.log-entry:hover { background: rgba(255,255,255,.018); }
+
+.log-mode-icon {
+  color: var(--c-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.log-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.log-mode-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--c-1);
+  letter-spacing: -0.005em;
+  text-transform: capitalize;
+}
+
+.log-time {
+  font-size: 11px;
+  color: var(--c-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.log-duration {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--c-1);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+.log-duration.partial { color: var(--c-3); }
+
+.log-empty {
+  text-align: center;
+  font-size: 13px;
+  color: var(--c-3);
+  padding: 32px 20px;
+  line-height: 1.6;
+}
+
+.log-note {
+  font-size: 11px;
+  color: var(--c-4);
   text-align: center;
   line-height: 1.5;
+  letter-spacing: 0.005em;
 }
 
 /* ============================================================
@@ -662,8 +812,6 @@ body::after {
   animation: toastIn .5s var(--ease-out);
 }
 
-.toast[hidden] { display: none; }
-
 @keyframes toastIn {
   from { opacity: 0; transform: translateX(-50%) translateY(20px); }
   to { opacity: 1; transform: translateX(-50%) translateY(0); }
@@ -671,21 +819,31 @@ body::after {
 
 .toast-inner {
   background: #0c0c0c;
-  border: 1px solid var(--hairline);
-  border-radius: 14px;
+  border: 1px solid var(--c-6);
+  border-radius: var(--radius);
   padding: 14px 22px;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 4px;
   box-shadow: 0 10px 40px rgba(0,0,0,.5);
+  min-width: 240px;
 }
 
-.toast-title { font-size: 14px; font-weight: 500; }
-.toast-sub { font-size: 12px; color: var(--ink-mute); }
+.toast-title {
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+}
+
+.toast-sub {
+  font-size: 12px;
+  color: var(--c-3);
+  letter-spacing: 0.005em;
+}
 
 /* ============================================================
-   A11y / small screens
+   A11y / responsive
    ============================================================ */
 @media (prefers-reduced-motion: reduce) {
   * {
@@ -696,20 +854,20 @@ body::after {
 }
 
 button:focus-visible {
-  outline: 1px solid var(--ink-dim);
+  outline: 1px solid var(--c-3);
   outline-offset: 3px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
 }
 
-@media (max-height: 700px) {
+@media (max-height: 720px) {
   .tagline { margin: 20px 0 26px; }
-  .dial-wrap { padding: 36px 0 14px; min-height: 260px; }
+  .dial-wrap { padding: 32px 0 12px; min-height: 260px; }
   .actions { padding-top: 20px; }
 }
 
 @media (max-width: 360px) {
-  .mode-label { font-size: 13px; }
-  .mode-time { font-size: 13px; }
+  .app { padding-left: 20px; padding-right: 20px; }
+  .mode-label, .mode-time { font-size: 13px; }
   .dial-label { font-size: 26px; }
   .dial-time { font-size: 22px; }
 }
