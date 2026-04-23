@@ -293,6 +293,20 @@ const dom = {
   vnYesSession:      $('vnYesSession'),
   vnAlwaysOn:        $('vnAlwaysOn'),
   vnNotThisTime:     $('vnNotThisTime'),
+
+  // v1.1.1 debug panel
+  mumblesDebug:   $('mumblesDebug'),
+  dbgState:       $('dbgState'),
+  dbgProgress:    $('dbgProgress'),
+  dbgSession:     $('dbgSession'),
+  dbgTap:         $('dbgTap'),
+  dbgCtx:         $('dbgCtx'),
+  dbgRate:        $('dbgRate'),
+  dbgBuffer:      $('dbgBuffer'),
+  dbgChunks:      $('dbgChunks'),
+  dbgLast:        $('dbgLast'),
+  dbgAccum:       $('dbgAccum'),
+  dbgError:       $('dbgError'),
 };
 
 // ============================================================
@@ -1836,9 +1850,89 @@ async function renderLog() {
   dom.logList.innerHTML = html;
 }
 
-// ============================================================
-// 20. Wire — event handlers
-// ============================================================
+// v1.1.1 — Mumbles debug panel
+let mumblesDebugTimer = null;
+
+function setDbg(el, text, cls) {
+  if (!el) return;
+  el.textContent = text;
+  el.className = 'debug-v' + (cls ? ' ' + cls : '');
+}
+
+function updateMumblesDebug() {
+  if (!dom.dbgState || !window.whisper || typeof whisper.getStats !== 'function') return;
+  const s = whisper.getStats();
+
+  const stateClass =
+    s.state === 'ready' ? 'ok' :
+    s.state === 'loading' ? 'warn' :
+    s.state === 'unsupported' ? 'err' : 'muted';
+  setDbg(dom.dbgState, s.state, stateClass);
+
+  if (s.state === 'ready') {
+    setDbg(dom.dbgProgress, '100% (cached)', 'ok');
+  } else if (s.state === 'loading') {
+    const pct = Math.round((s.progress || 0) * 100);
+    setDbg(dom.dbgProgress, pct + '%', 'warn');
+  } else {
+    setDbg(dom.dbgProgress, '—', 'muted');
+  }
+
+  setDbg(dom.dbgSession, s.sessionActive ? 'yes' : 'no',
+    s.sessionActive ? 'ok' : 'muted');
+
+  const tapOn = !!state.sttProcessor;
+  setDbg(dom.dbgTap, tapOn ? 'connected' : 'detached',
+    tapOn ? 'ok' : 'muted');
+
+  if (state.audioCtx) {
+    const cs = state.audioCtx.state;
+    setDbg(dom.dbgCtx, cs, cs === 'running' ? 'ok' : cs === 'suspended' ? 'err' : 'warn');
+  } else {
+    setDbg(dom.dbgCtx, 'not created', 'muted');
+  }
+
+  setDbg(dom.dbgRate, s.inputSampleRate ? s.inputSampleRate + ' Hz' : '—',
+    s.inputSampleRate ? 'ok' : 'muted');
+
+  const bufSec = s.bufferSeconds.toFixed(1);
+  setDbg(dom.dbgBuffer, s.bufferSamples + ' samp · ' + bufSec + 's',
+    s.bufferSamples > 0 ? 'ok' : 'muted');
+
+  setDbg(dom.dbgChunks, s.chunksSent + ' / ' + s.chunksDone + ' / ' + s.chunksPending,
+    s.chunksDone > 0 ? 'ok' : s.chunksPending > 0 ? 'warn' : 'muted');
+
+  const last = (whisper.lastResult || '').trim();
+  setDbg(dom.dbgLast, last || '—', last ? 'ok' : 'muted');
+
+  const accum = (state.voiceNotesText || '').trim();
+  if (accum) {
+    const preview = accum.length > 80 ? accum.slice(0, 80) + '…' : accum;
+    setDbg(dom.dbgAccum, preview + ' (' + accum.length + 'ch)', 'ok');
+  } else {
+    setDbg(dom.dbgAccum, '—', 'muted');
+  }
+
+  if (s.error) {
+    setDbg(dom.dbgError, s.error, 'err');
+  } else {
+    setDbg(dom.dbgError, 'none', 'muted');
+  }
+}
+
+function startMumblesDebugPolling() {
+  if (mumblesDebugTimer) return;
+  updateMumblesDebug();
+  mumblesDebugTimer = setInterval(updateMumblesDebug, 1000);
+}
+
+function stopMumblesDebugPolling() {
+  if (mumblesDebugTimer) {
+    clearInterval(mumblesDebugTimer);
+    mumblesDebugTimer = null;
+  }
+}
+
 function applySettingsUI() {
   const pack    = settings.get('soundPack');
   const haptOn  = settings.get('haptics') === 'on';
@@ -1903,8 +1997,12 @@ function wire() {
     dom.logOverlay.hidden = false;
     applySettingsUI();
     await renderLog();
+    startMumblesDebugPolling();
   });
-  dom.logClose.addEventListener('click', () => { dom.logOverlay.hidden = true; });
+  dom.logClose.addEventListener('click', () => {
+    dom.logOverlay.hidden = true;
+    stopMumblesDebugPolling();
+  });
 
   dom.ratingStars.addEventListener('click', (e) => {
     const btn = e.target.closest('.rating-star');
