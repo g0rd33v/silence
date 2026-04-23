@@ -138,6 +138,8 @@ const CONFIG = {
   STT_MIN_CHARS:          2,
 };
 
+const APP_VERSION = 'v1.1.3';
+
 // ============================================================
 // 1b. Settings — user preferences, persisted to localStorage
 // ============================================================
@@ -1452,10 +1454,10 @@ function updateSttStatus(s) {
   if (s.state === 'loading') {
     const pct = Math.round((s.progress || 0) * 100);
     dom.statusText.textContent = pct > 0
-      ? `Loading mumbles… ${pct}%`
-      : 'Loading mumbles…';
+      ? `Loading ideas… ${pct}%`
+      : 'Loading ideas…';
   } else if (s.state === 'unsupported') {
-    dom.statusText.textContent = 'Mumbles unsupported on this device';
+    dom.statusText.textContent = 'Ideas unsupported on this device';
   } else if (s.state === 'ready') {
     dom.statusText.textContent = 'Listening for silence…';
   }
@@ -1883,7 +1885,7 @@ async function renderLog() {
     let vnBadge = '';
     let vnPanel = '';
     if (s.voiceNotes && s.id != null) {
-      vnBadge = `<button type="button" class="log-vn-badge" data-vn-toggle="${s.id}" aria-expanded="false" aria-controls="vn-panel-${s.id}">${NOTEBOOK_SVG_INLINE}<span>Mumbles</span></button>`;
+      vnBadge = `<button type="button" class="log-vn-badge" data-vn-toggle="${s.id}" aria-expanded="false" aria-controls="vn-panel-${s.id}">${NOTEBOOK_SVG_INLINE}<span>Ideas</span></button>`;
       vnPanel = `
         <div class="log-vn-panel" id="vn-panel-${s.id}" data-vn-panel="${s.id}" hidden>
           <p class="log-vn-text">${escapeHTML(s.voiceNotes)}</p>
@@ -2028,7 +2030,7 @@ function renderCrashLog() {
     const meta = [];
     if (e.mode) meta.push(e.mode);
     if (e.running) meta.push(`running ${e.elapsed}s`);
-    if (e.vnEnabled) meta.push('mumbles on');
+    if (e.vnEnabled) meta.push('ideas on');
     if (e.source) meta.push(e.source);
     html += `<div class="crashlog-entry">
       <div class="cl-head"><span class="cl-kind">${escapeHTML(e.kind)}</span><span>${escapeHTML(when)}</span></div>
@@ -2119,7 +2121,7 @@ function wire() {
         ? 'No crashes recorded.'
         : list.map(e => {
             const d = new Date(e.ts).toISOString();
-            const meta = [e.mode, e.running ? `running ${e.elapsed}s` : null, e.vnEnabled ? 'mumbles on' : null, e.source]
+            const meta = [e.mode, e.running ? `running ${e.elapsed}s` : null, e.vnEnabled ? 'ideas on' : null, e.source]
               .filter(Boolean).join(' · ');
             return `[${d}] ${e.kind}: ${e.message}\n  ${meta}${e.stack ? '\n' + e.stack : ''}`;
           }).join('\n\n');
@@ -2288,6 +2290,8 @@ function wire() {
 // ============================================================
 async function boot() {
   populateStaticIcons();
+  const vEl = document.getElementById('appVersion');
+  if (vEl) vEl.textContent = APP_VERSION;
   wire();
   applySettingsUI();
   selectMode('unwind');
