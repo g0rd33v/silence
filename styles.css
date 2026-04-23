@@ -1392,3 +1392,63 @@ button:focus-visible {
 .debug-v.warn  { color: #fbbf24; }
 .debug-v.err   { color: #f87171; }
 .debug-v.muted { color: var(--c-3); }
+
+/* ---- v1.1.2 Crash log ---- */
+.crashlog-count {
+  color: var(--c-4);
+  font-weight: 400;
+  font-size: 10px;
+  margin-left: 6px;
+}
+.crashlog-count.has-crashes {
+  color: #f87171;
+}
+.crashlog-list {
+  margin-top: 8px;
+  max-height: 240px;
+  overflow-y: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  line-height: 1.45;
+  color: var(--c-2);
+}
+.crashlog-entry {
+  padding: 8px 0;
+  border-bottom: 1px dashed rgba(255,255,255,0.06);
+}
+.crashlog-entry:last-child { border-bottom: none; }
+.crashlog-entry .cl-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+  color: var(--c-3);
+}
+.crashlog-entry .cl-kind {
+  color: #f87171;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.crashlog-entry .cl-msg {
+  color: var(--c-1);
+  word-break: break-word;
+  margin-bottom: 3px;
+}
+.crashlog-entry .cl-meta {
+  color: var(--c-4);
+  font-size: 9px;
+}
+.crashlog-entry pre {
+  color: var(--c-3);
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin-top: 4px;
+  font-size: 9px;
+}
+.crashlog-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 8px;
+}

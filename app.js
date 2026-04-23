@@ -37,6 +37,60 @@
 'use strict';
 
 // ============================================================
+// 0. Crash tracker — v1.1.2
+// Logs uncaught errors and unhandled rejections to localStorage
+// so the Infinity-mode crashes can be diagnosed. Installed BEFORE
+// anything else runs so it catches boot errors too.
+// ============================================================
+const CRASH_LOG_KEY = 'silence.crashlog.v1';
+const CRASH_LOG_MAX = 20;
+
+const crashLog = {
+  read() {
+    try {
+      const raw = localStorage.getItem(CRASH_LOG_KEY);
+      return raw ? JSON.parse(raw) : [];
+    } catch (_) { return []; }
+  },
+  write(entries) {
+    try { localStorage.setItem(CRASH_LOG_KEY, JSON.stringify(entries)); } catch (_) {}
+  },
+  record(entry) {
+    const list = this.read();
+    list.unshift({
+      ts: Date.now(),
+      mode: (typeof state !== 'undefined' && state && state.mode) || null,
+      running: (typeof state !== 'undefined' && state && state.running) || false,
+      elapsed: (typeof state !== 'undefined' && state && state.elapsed) ? Math.round(state.elapsed) : 0,
+      vnEnabled: (typeof state !== 'undefined' && state && state.voiceNotesEnabled) || false,
+      ...entry,
+    });
+    this.write(list.slice(0, CRASH_LOG_MAX));
+  },
+  clear() { this.write([]); },
+};
+
+window.addEventListener('error', (e) => {
+  crashLog.record({
+    kind: 'error',
+    message: (e.error && e.error.message) || e.message || 'unknown error',
+    stack: (e.error && e.error.stack) ? String(e.error.stack).split('\n').slice(0, 6).join('\n') : null,
+    source: e.filename ? `${e.filename}:${e.lineno}:${e.colno}` : null,
+    ua: navigator.userAgent,
+  });
+});
+
+window.addEventListener('unhandledrejection', (e) => {
+  const r = e.reason;
+  crashLog.record({
+    kind: 'rejection',
+    message: (r && r.message) ? r.message : String(r),
+    stack: (r && r.stack) ? String(r.stack).split('\n').slice(0, 6).join('\n') : null,
+    ua: navigator.userAgent,
+  });
+});
+
+// ============================================================
 // 1. Config
 // ============================================================
 const CONFIG = {
@@ -307,6 +361,13 @@ const dom = {
   dbgLast:        $('dbgLast'),
   dbgAccum:       $('dbgAccum'),
   dbgError:       $('dbgError'),
+
+  // v1.1.2 crash log
+  crashLogPanel:  $('crashLogPanel'),
+  crashLogList:   $('crashLogList'),
+  crashLogCount:  $('crashLogCount'),
+  crashLogCopy:   $('crashLogCopy'),
+  crashLogClear:  $('crashLogClear'),
 };
 
 // ============================================================
@@ -1860,14 +1921,21 @@ function setDbg(el, text, cls) {
 }
 
 function updateMumblesDebug() {
-  if (!dom.dbgState || !window.whisper || typeof whisper.getStats !== 'function') return;
-  const s = whisper.getStats();
+  if (!dom.dbgState) return;
+  try {
+    const s = (window.whisper && typeof whisper.getStats === 'function')
+      ? whisper.getStats()
+      : null;
+    if (!s) {
+      setDbg(dom.dbgState, 'whisper not loaded', 'err');
+      return;
+    }
 
-  const stateClass =
-    s.state === 'ready' ? 'ok' :
-    s.state === 'loading' ? 'warn' :
-    s.state === 'unsupported' ? 'err' : 'muted';
-  setDbg(dom.dbgState, s.state, stateClass);
+    const stateClass =
+      s.state === 'ready' ? 'ok' :
+      s.state === 'loading' ? 'warn' :
+      s.state === 'unsupported' ? 'err' : 'muted';
+    setDbg(dom.dbgState, s.state, stateClass);
 
   if (s.state === 'ready') {
     setDbg(dom.dbgProgress, '100% (cached)', 'ok');
@@ -1918,6 +1986,9 @@ function updateMumblesDebug() {
   } else {
     setDbg(dom.dbgError, 'none', 'muted');
   }
+  } catch (err) {
+    setDbg(dom.dbgError, 'panel error: ' + err.message, 'err');
+  }
 }
 
 function startMumblesDebugPolling() {
@@ -1931,6 +2002,42 @@ function stopMumblesDebugPolling() {
     clearInterval(mumblesDebugTimer);
     mumblesDebugTimer = null;
   }
+}
+
+// v1.1.2 — Crash log render
+function renderCrashLog() {
+  if (!dom.crashLogList) return;
+  const list = crashLog.read();
+  if (dom.crashLogCount) {
+    if (list.length > 0) {
+      dom.crashLogCount.textContent = `(${list.length})`;
+      dom.crashLogCount.classList.add('has-crashes');
+    } else {
+      dom.crashLogCount.textContent = '';
+      dom.crashLogCount.classList.remove('has-crashes');
+    }
+  }
+  if (list.length === 0) {
+    dom.crashLogList.innerHTML = '<span style="color:var(--c-4);">No crashes recorded.</span>';
+    return;
+  }
+  let html = '';
+  for (const e of list) {
+    const date = new Date(e.ts);
+    const when = `${date.getMonth()+1}/${date.getDate()} ${String(date.getHours()).padStart(2,'0')}:${String(date.getMinutes()).padStart(2,'0')}:${String(date.getSeconds()).padStart(2,'0')}`;
+    const meta = [];
+    if (e.mode) meta.push(e.mode);
+    if (e.running) meta.push(`running ${e.elapsed}s`);
+    if (e.vnEnabled) meta.push('mumbles on');
+    if (e.source) meta.push(e.source);
+    html += `<div class="crashlog-entry">
+      <div class="cl-head"><span class="cl-kind">${escapeHTML(e.kind)}</span><span>${escapeHTML(when)}</span></div>
+      <div class="cl-msg">${escapeHTML(e.message || '(no message)')}</div>
+      <div class="cl-meta">${escapeHTML(meta.join(' · '))}</div>
+      ${e.stack ? `<pre>${escapeHTML(e.stack)}</pre>` : ''}
+    </div>`;
+  }
+  dom.crashLogList.innerHTML = html;
 }
 
 function applySettingsUI() {
@@ -1998,11 +2105,43 @@ function wire() {
     applySettingsUI();
     await renderLog();
     startMumblesDebugPolling();
+    renderCrashLog();
   });
   dom.logClose.addEventListener('click', () => {
     dom.logOverlay.hidden = true;
     stopMumblesDebugPolling();
   });
+
+  if (dom.crashLogCopy) {
+    dom.crashLogCopy.addEventListener('click', () => {
+      const list = crashLog.read();
+      const text = list.length === 0
+        ? 'No crashes recorded.'
+        : list.map(e => {
+            const d = new Date(e.ts).toISOString();
+            const meta = [e.mode, e.running ? `running ${e.elapsed}s` : null, e.vnEnabled ? 'mumbles on' : null, e.source]
+              .filter(Boolean).join(' · ');
+            return `[${d}] ${e.kind}: ${e.message}\n  ${meta}${e.stack ? '\n' + e.stack : ''}`;
+          }).join('\n\n');
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(() => {
+          const orig = dom.crashLogCopy.textContent;
+          dom.crashLogCopy.textContent = 'Copied';
+          dom.crashLogCopy.classList.add('copied');
+          setTimeout(() => { dom.crashLogCopy.textContent = orig; dom.crashLogCopy.classList.remove('copied'); }, 1200);
+        }).catch(() => {});
+      }
+      haptics.tap();
+    });
+  }
+
+  if (dom.crashLogClear) {
+    dom.crashLogClear.addEventListener('click', () => {
+      crashLog.clear();
+      renderCrashLog();
+      haptics.tap();
+    });
+  }
 
   dom.ratingStars.addEventListener('click', (e) => {
     const btn = e.target.closest('.rating-star');

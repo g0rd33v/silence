@@ -229,6 +229,16 @@
             <div class="debug-row"><span class="debug-k">Error</span><span class="debug-v" id="dbgError">—</span></div>
           </div>
         </details>
+
+        <!-- v1.1.2 Crash log — uncaught errors + unhandled rejections -->
+        <details class="settings-debug" id="crashLogPanel">
+          <summary>Crash log <span class="crashlog-count" id="crashLogCount"></span></summary>
+          <div class="crashlog-list" id="crashLogList">No crashes recorded.</div>
+          <div class="crashlog-actions">
+            <button type="button" class="log-vn-copy" id="crashLogCopy">Copy all</button>
+            <button type="button" class="log-vn-copy" id="crashLogClear">Clear</button>
+          </div>
+        </details>
       </div>
 
       <p class="log-signature">From <a href="https://beta.labs.vc" target="_blank" rel="noopener">Labs</a> with love</p>
