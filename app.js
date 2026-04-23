@@ -138,7 +138,7 @@ const CONFIG = {
   STT_MIN_CHARS:          2,
 };
 
-const APP_VERSION = 'v1.2.1';
+const APP_VERSION = 'v1.2.2';
 
 // ============================================================
 // 1b. Settings — user preferences, persisted to localStorage
@@ -360,6 +360,15 @@ const dom = {
   dlBarFill:   $('dlBarFill'),
   dlBarPct:    $('dlBarPct'),
   dlBarSub:    $('dlBarSub'),
+
+  // v1.2.2 manual model download
+  modelStatus:           $('modelStatus'),
+  modelCheck:            $('modelCheck'),
+  modelStatusText:       $('modelStatusText'),
+  modelDlBtn:            $('modelDlBtn'),
+  modelDlConfirmOverlay: $('modelDlConfirmOverlay'),
+  modelDlConfirmYes:     $('modelDlConfirmYes'),
+  modelDlConfirmNo:      $('modelDlConfirmNo'),
 
   // v1.1.1 debug panel
   mumblesDebug:   $('mumblesDebug'),
@@ -1495,6 +1504,48 @@ function finishDownloadBar() {
     if (dom.dlBar) dom.dlBar.hidden = true;
   }, 2200);
   markModelCached();
+  renderModelStatus();
+}
+
+// v1.2.2 — Speech model row in Settings
+function renderModelStatus() {
+  if (!dom.modelStatus) return;
+  const ready = whisper.ready;
+  const loading = whisper.loading;
+  const cached = modelEverCached();
+
+  if (ready || cached) {
+    dom.modelStatus.classList.add('installed');
+    if (dom.modelCheck) dom.modelCheck.hidden = false;
+    if (dom.modelStatusText) dom.modelStatusText.textContent = 'Installed';
+    if (dom.modelDlBtn) dom.modelDlBtn.disabled = true;
+  } else if (loading) {
+    dom.modelStatus.classList.remove('installed');
+    if (dom.modelCheck) dom.modelCheck.hidden = true;
+    const pct = Math.round((whisper.loadProgress || 0) * 100);
+    if (dom.modelStatusText) dom.modelStatusText.textContent = `Downloading… ${pct}%`;
+    if (dom.modelDlBtn) dom.modelDlBtn.disabled = true;
+  } else {
+    dom.modelStatus.classList.remove('installed');
+    if (dom.modelCheck) dom.modelCheck.hidden = true;
+    if (dom.modelStatusText) dom.modelStatusText.textContent = 'Not installed';
+    if (dom.modelDlBtn) {
+      dom.modelDlBtn.disabled = false;
+      dom.modelDlBtn.textContent = 'Download';
+    }
+  }
+}
+
+function triggerModelDownload() {
+  // Same flow as the auto-download from Infinity sessions: shows the
+  // pinned top progress bar via updateSttStatus(), preload triggers
+  // the fetch. Safe to call when model already loading or ready.
+  if (whisper.ready) { renderModelStatus(); return; }
+  whisper.preload((s) => {
+    updateSttStatus(s);
+    renderModelStatus();
+  });
+  renderModelStatus();
 }
 
 function updateSttStatus(s) {
@@ -2068,7 +2119,11 @@ function updateMumblesDebug() {
 function startMumblesDebugPolling() {
   if (mumblesDebugTimer) return;
   updateMumblesDebug();
-  mumblesDebugTimer = setInterval(updateMumblesDebug, 1000);
+  renderModelStatus();
+  mumblesDebugTimer = setInterval(() => {
+    updateMumblesDebug();
+    renderModelStatus();
+  }, 1000);
 }
 
 function stopMumblesDebugPolling() {
@@ -2189,6 +2244,7 @@ function wire() {
     await renderLog();
     startMumblesDebugPolling();
     renderCrashLog();
+    renderModelStatus();
   });
   dom.logClose.addEventListener('click', () => {
     dom.logOverlay.hidden = true;
@@ -2222,6 +2278,29 @@ function wire() {
     dom.crashLogClear.addEventListener('click', () => {
       crashLog.clear();
       renderCrashLog();
+      haptics.tap();
+    });
+  }
+
+  // v1.2.2 — Speech model download flow
+  if (dom.modelDlBtn) {
+    dom.modelDlBtn.addEventListener('click', () => {
+      if (whisper.ready || modelEverCached()) return;
+      if (!dom.modelDlConfirmOverlay) return;
+      dom.modelDlConfirmOverlay.hidden = false;
+      haptics.tap();
+    });
+  }
+  if (dom.modelDlConfirmYes) {
+    dom.modelDlConfirmYes.addEventListener('click', () => {
+      if (dom.modelDlConfirmOverlay) dom.modelDlConfirmOverlay.hidden = true;
+      haptics.tap();
+      triggerModelDownload();
+    });
+  }
+  if (dom.modelDlConfirmNo) {
+    dom.modelDlConfirmNo.addEventListener('click', () => {
+      if (dom.modelDlConfirmOverlay) dom.modelDlConfirmOverlay.hidden = true;
       haptics.tap();
     });
   }

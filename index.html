@@ -149,6 +149,22 @@
     </div>
   </div>
 
+  <!-- v1.2.2 — Speech model download confirmation -->
+  <div class="overlay" id="modelDlConfirmOverlay" hidden>
+    <div class="overlay-card vn-card">
+      <div class="vn-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 3v12m0 0l-4-4m4 4l4-4"/>
+          <path d="M5 21h14"/>
+        </svg>
+      </div>
+      <h2>Download speech model?</h2>
+      <p class="lead">A ~500 MB on-device speech model will be downloaded so Silence can transcribe your ideas during Infinity sessions. Stays on your device — no audio ever leaves your phone. One-time download. Use Wi-Fi.</p>
+      <button class="primary-btn" id="modelDlConfirmYes">Download now</button>
+      <button class="ghost-btn" id="modelDlConfirmNo">Cancel</button>
+    </div>
+  </div>
+
   <!-- Voice notes confirmation — shown before Infinity sessions when setting is 'ask' -->
   <div class="overlay" id="vnConfirmOverlay" hidden>
     <div class="overlay-card vn-card">
@@ -238,6 +254,19 @@
           </div>
         </div>
         <p class="settings-hint">Forcing a language reduces hallucination.</p>
+
+        <!-- v1.2.2 — Speech model status + manual download -->
+        <div class="settings-row settings-row-model">
+          <span class="settings-label">Speech model</span>
+          <div class="model-status" id="modelStatus">
+            <span class="model-check" id="modelCheck" hidden aria-label="Installed">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"/></svg>
+            </span>
+            <span class="model-status-text" id="modelStatusText">Not installed</span>
+            <button type="button" class="settings-chip model-dl-btn" id="modelDlBtn">Download</button>
+          </div>
+        </div>
+        <p class="settings-hint">~500 MB · stays on device · downloads once.</p>
 
         <!-- v1.1.1 Mumbles diagnostic panel — live readout of the STT pipeline -->
         <details class="settings-debug" id="mumblesDebug">

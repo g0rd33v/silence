@@ -1562,3 +1562,42 @@ button:focus-visible {
   letter-spacing: 0.005em;
   text-align: left;
 }
+
+/* ---- v1.2.2 Speech model download row ---- */
+.model-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.model-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: rgba(74, 222, 128, 0.15);
+  color: #4ade80;
+  flex-shrink: 0;
+}
+.model-status-text {
+  font-size: 11px;
+  color: var(--c-3);
+  letter-spacing: 0.01em;
+}
+.model-status.installed .model-status-text {
+  color: #4ade80;
+}
+.model-dl-btn {
+  margin-left: 4px;
+}
+.model-dl-btn[disabled] {
+  opacity: 0.5;
+  cursor: default;
+  pointer-events: none;
+}
+.model-status.installed .model-dl-btn {
+  display: none;
+}
