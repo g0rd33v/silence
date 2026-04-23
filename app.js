@@ -138,7 +138,7 @@ const CONFIG = {
   STT_MIN_CHARS:          2,
 };
 
-const APP_VERSION = 'v1.1.3';
+const APP_VERSION = 'v1.2.0';
 
 // ============================================================
 // 1b. Settings — user preferences, persisted to localStorage
@@ -148,9 +148,11 @@ const DEFAULT_SETTINGS = {
   soundPack:  'cosmos',  // 'cosmos' | 'bell' | 'pulse' | 'off'
   haptics:    'on',      // 'on' | 'off'
   voiceNotes: 'ask',     // 'on' | 'ask' | 'off'  (Infinity mode only)
+  voiceNotesLang: 'auto', // v1.2: 'auto' | 'english' | 'russian'
 };
 const SOUND_PACKS = ['cosmos', 'bell', 'pulse', 'off'];
 const VOICE_NOTES_MODES = ['on', 'ask', 'off'];
+const VOICE_NOTES_LANGS = ['auto', 'english', 'russian'];
 
 const settings = {
   _data: null,
@@ -165,6 +167,7 @@ const settings = {
           soundPack:  SOUND_PACKS.includes(parsed.soundPack) ? parsed.soundPack : DEFAULT_SETTINGS.soundPack,
           haptics:    parsed.haptics === 'off' ? 'off' : 'on',
           voiceNotes: VOICE_NOTES_MODES.includes(parsed.voiceNotes) ? parsed.voiceNotes : DEFAULT_SETTINGS.voiceNotes,
+          voiceNotesLang: VOICE_NOTES_LANGS.includes(parsed.voiceNotesLang) ? parsed.voiceNotesLang : DEFAULT_SETTINGS.voiceNotesLang,
         };
         return this._data;
       }
@@ -345,6 +348,7 @@ const dom = {
   hapticsHint:       $('hapticsHint'),
 
   voiceNotesChips:   $('voiceNotesChips'),
+  voiceNotesLangChips: $('voiceNotesLangChips'),
   vnConfirmOverlay:  $('vnConfirmOverlay'),
   vnYesSession:      $('vnYesSession'),
   vnAlwaysOn:        $('vnAlwaysOn'),
@@ -1587,6 +1591,7 @@ async function startSession() {
   // status surfaces through the status text below the dial.
   if (state.voiceNotesEnabled) {
     whisper.preload((s) => updateSttStatus(s));
+    whisper.setLanguage(settings.get('voiceNotesLang'));
     whisper.startSession(
       state.audioCtx ? state.audioCtx.sampleRate : 48000,
       (text) => {
@@ -2063,6 +2068,15 @@ function applySettingsUI() {
     });
   }
 
+  if (dom.voiceNotesLangChips) {
+    const lang = settings.get('voiceNotesLang') || 'auto';
+    dom.voiceNotesLangChips.querySelectorAll('.settings-chip').forEach((chip) => {
+      const isSelected = chip.dataset.vnLang === lang;
+      chip.classList.toggle('selected', isSelected);
+      chip.setAttribute('aria-checked', String(isSelected));
+    });
+  }
+
   if (dom.hapticsToggle) {
     dom.hapticsToggle.setAttribute('aria-checked', String(haptOn));
   }
@@ -2227,6 +2241,18 @@ function wire() {
       const mode = chip.dataset.vn;
       if (!VOICE_NOTES_MODES.includes(mode)) return;
       settings.set('voiceNotes', mode);
+      applySettingsUI();
+      haptics.tap();
+    });
+  }
+
+  if (dom.voiceNotesLangChips) {
+    dom.voiceNotesLangChips.addEventListener('click', (e) => {
+      const chip = e.target.closest('.settings-chip');
+      if (!chip) return;
+      const lang = chip.dataset.vnLang;
+      if (!VOICE_NOTES_LANGS.includes(lang)) return;
+      settings.set('voiceNotesLang', lang);
       applySettingsUI();
       haptics.tap();
     });

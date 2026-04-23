@@ -37,8 +37,13 @@ import {
 env.allowLocalModels = false;
 env.allowRemoteModels = true;
 
-// Model identity. whisper-tiny multilingual.
-const MODEL_ID = 'Xenova/whisper-tiny';
+// Model identity. whisper-small multilingual — ~500MB download, but
+// whisper-tiny is effectively useless on Russian (heavy hallucination,
+// misdetects language as English half the time). whisper-small is the
+// smallest model that produces usable Russian transcripts in the
+// transformers.js ONNX line-up. One-time download, cached forever in
+// the browser's Cache API.
+const MODEL_ID = 'Xenova/whisper-small';
 
 let transcriber = null;
 let loading = false;
@@ -112,7 +117,7 @@ async function loadPipeline() {
   }
 }
 
-async function transcribe(audio, id) {
+async function transcribe(audio, id, language) {
   if (!transcriber) {
     try { await loadPipeline(); } catch (_) { return; }
   }
@@ -122,11 +127,20 @@ async function transcribe(audio, id) {
   }
 
   try {
-    const out = await transcriber(audio, {
+    // language: 'auto' (default) lets whisper detect. Explicit 'russian'
+    // or 'english' dramatically reduces hallucination — on near-silent
+    // audio whisper defaults to guessing English phrases. For Russian
+    // users, forcing the language fixes the "nothing works" experience.
+    const opts = {
       chunk_length_s: 30,
       stride_length_s: 5,
       return_timestamps: false,
-    });
+    };
+    if (language && language !== 'auto') {
+      opts.language = language;
+      opts.task = 'transcribe';
+    }
+    const out = await transcriber(audio, opts);
     const text = (out && typeof out.text === 'string') ? out.text.trim() : '';
     self.postMessage({ type: 'result', text, id });
   } catch (e) {
@@ -145,7 +159,7 @@ self.addEventListener('message', async (e) => {
     return;
   }
   if (msg.type === 'transcribe') {
-    await transcribe(msg.audio, msg.id);
+    await transcribe(msg.audio, msg.id, msg.language);
     return;
   }
   if (msg.type === 'shutdown') {

@@ -37,6 +37,15 @@ const whisper = {
   chunkId: 0,
   pending: 0,
 
+  // v1.2: language hint for transcription. 'auto' | 'russian' | 'english'.
+  // Passed through to whisper via generate_kwargs; non-auto dramatically
+  // cuts hallucination rate on the target language.
+  language: 'auto',
+
+  setLanguage(lang) {
+    this.language = lang || 'auto';
+  },
+
   ensureWorker() {
     if (this.worker) return true;
     if (this.unsupported) return false;
@@ -146,7 +155,12 @@ const whisper = {
 
     const id = ++this.chunkId;
     this.pending++;
-    this.worker.postMessage({ type: 'transcribe', audio: slice, id });
+    this.worker.postMessage({
+      type: 'transcribe',
+      audio: slice,
+      id,
+      language: this.language,
+    });
   },
 
   _onMessage(msg) {

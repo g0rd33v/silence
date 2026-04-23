@@ -212,6 +212,16 @@
         </div>
         <p class="settings-hint settings-hint-vn">Infinity mode only. On-device transcription — nothing leaves your phone.</p>
 
+        <div class="settings-row">
+          <span class="settings-label">Language</span>
+          <div class="settings-chips" id="voiceNotesLangChips" role="radiogroup" aria-label="Ideas transcription language">
+            <button type="button" class="settings-chip" data-vn-lang="auto">Auto</button>
+            <button type="button" class="settings-chip" data-vn-lang="english">EN</button>
+            <button type="button" class="settings-chip" data-vn-lang="russian">RU</button>
+          </div>
+        </div>
+        <p class="settings-hint">Forcing a language reduces hallucination.</p>
+
         <!-- v1.1.1 Mumbles diagnostic panel — live readout of the STT pipeline -->
         <details class="settings-debug" id="mumblesDebug">
           <summary>Ideas diagnostics</summary>
