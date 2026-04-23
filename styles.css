@@ -1482,3 +1482,83 @@ button:focus-visible {
   justify-content: flex-end;
   margin-top: 8px;
 }
+
+/* ---- v1.2.1 Model download bar — pinned to top of viewport ---- */
+.dl-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 200;
+  background: rgba(10, 10, 10, 0.96);
+  backdrop-filter: blur(14px) saturate(140%);
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
+  border-bottom: 1px solid var(--c-6);
+  padding-top: var(--safe-top);
+  animation: dlBarIn .35s var(--ease-out);
+}
+@keyframes dlBarIn {
+  from { opacity: 0; transform: translateY(-20px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.dl-bar-inner {
+  max-width: 440px;
+  margin: 0 auto;
+  padding: 12px 20px 14px;
+}
+.dl-bar-label {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 8px;
+  gap: 10px;
+}
+.dl-bar-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--c-1);
+  letter-spacing: 0.01em;
+}
+.dl-bar-pct {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--c-2);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+.dl-bar-track {
+  height: 3px;
+  background: var(--c-6);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.dl-bar-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, var(--c-3) 0%, var(--c-1) 100%);
+  border-radius: 2px;
+  transition: width 0.3s var(--ease);
+}
+.dl-bar-sub {
+  margin-top: 6px;
+  font-size: 10px;
+  color: var(--c-4);
+  letter-spacing: 0.02em;
+}
+.dl-bar.done .dl-bar-fill {
+  background: rgba(140, 210, 170, 0.8);
+}
+
+/* ---- Download notice in Ideas confirmation modal ---- */
+.vn-download-notice {
+  margin: 0 0 18px;
+  padding: 10px 12px;
+  border: 1px solid var(--c-6);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.02);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--c-2);
+  letter-spacing: 0.005em;
+  text-align: left;
+}

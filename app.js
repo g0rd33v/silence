@@ -138,7 +138,7 @@ const CONFIG = {
   STT_MIN_CHARS:          2,
 };
 
-const APP_VERSION = 'v1.2.0';
+const APP_VERSION = 'v1.2.1';
 
 // ============================================================
 // 1b. Settings — user preferences, persisted to localStorage
@@ -353,6 +353,13 @@ const dom = {
   vnYesSession:      $('vnYesSession'),
   vnAlwaysOn:        $('vnAlwaysOn'),
   vnNotThisTime:     $('vnNotThisTime'),
+  vnDownloadNotice:  $('vnDownloadNotice'),
+
+  // v1.2.1 download bar
+  dlBar:       $('dlBar'),
+  dlBarFill:   $('dlBarFill'),
+  dlBarPct:    $('dlBarPct'),
+  dlBarSub:    $('dlBarSub'),
 
   // v1.1.1 debug panel
   mumblesDebug:   $('mumblesDebug'),
@@ -1451,7 +1458,63 @@ function pauseStatusText() {
 // STT status surface — overrides the "Listening for silence…" line
 // while the model is loading or unsupported. Never touches the pause
 // message; the pause path has priority.
+// v1.2.1 — model download progress bar
+const MODEL_CACHED_KEY = 'silence.modelCached.v1';
+
+function modelEverCached() {
+  try { return localStorage.getItem(MODEL_CACHED_KEY) === '1'; } catch (_) { return false; }
+}
+
+function markModelCached() {
+  try { localStorage.setItem(MODEL_CACHED_KEY, '1'); } catch (_) {}
+}
+
+let dlBarHideTimer = null;
+
+function showDownloadBar() {
+  if (!dom.dlBar) return;
+  if (dlBarHideTimer) { clearTimeout(dlBarHideTimer); dlBarHideTimer = null; }
+  dom.dlBar.hidden = false;
+  dom.dlBar.classList.remove('done');
+}
+
+function updateDownloadBar(progress) {
+  if (!dom.dlBar || !dom.dlBarFill || !dom.dlBarPct) return;
+  const pct = Math.max(0, Math.min(100, Math.round((progress || 0) * 100)));
+  dom.dlBarFill.style.width = pct + '%';
+  dom.dlBarPct.textContent = pct + '%';
+}
+
+function finishDownloadBar() {
+  if (!dom.dlBar) return;
+  dom.dlBar.classList.add('done');
+  if (dom.dlBarFill) dom.dlBarFill.style.width = '100%';
+  if (dom.dlBarPct) dom.dlBarPct.textContent = 'Ready';
+  if (dom.dlBarSub) dom.dlBarSub.textContent = 'Model cached on your device';
+  dlBarHideTimer = setTimeout(() => {
+    if (dom.dlBar) dom.dlBar.hidden = true;
+  }, 2200);
+  markModelCached();
+}
+
 function updateSttStatus(s) {
+  // Download bar: only show while we're actually downloading. Once the
+  // model is cached, subsequent loads finish instantly and the bar is
+  // skipped entirely.
+  if (s.state === 'loading' && !modelEverCached()) {
+    showDownloadBar();
+    updateDownloadBar(s.progress || 0);
+  } else if (s.state === 'ready') {
+    // If the bar is visible (first-time download just finished), animate
+    // it to the "ready" state and mark the model as cached.
+    if (dom.dlBar && !dom.dlBar.hidden) {
+      finishDownloadBar();
+    } else {
+      // Model was already cached — nothing to show, just persist the flag.
+      markModelCached();
+    }
+  }
+
   if (!state.voiceNotesEnabled) return;
   if (state.paused) return;
   if (!dom.statusText) return;
@@ -1547,6 +1610,10 @@ function maybeAskVoiceNotes() {
     if (pref === 'off') return resolve(false);
 
     if (!dom.vnConfirmOverlay) return resolve(false);
+    // Hide the "first-time download" notice if the model is already cached.
+    if (dom.vnDownloadNotice) {
+      dom.vnDownloadNotice.style.display = modelEverCached() ? 'none' : '';
+    }
     dom.vnConfirmOverlay.hidden = false;
 
     const cleanup = () => {

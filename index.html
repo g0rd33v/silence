@@ -27,6 +27,22 @@
 </head>
 <body>
 
+  <!-- v1.2.1 Model download bar — shown while whisper-small is downloading.
+       Pinned to the very top of the viewport so it's visible regardless of
+       app state (running session, night mode, log open). -->
+  <div class="dl-bar" id="dlBar" hidden aria-live="polite">
+    <div class="dl-bar-inner">
+      <div class="dl-bar-label">
+        <span class="dl-bar-title">Downloading speech model</span>
+        <span class="dl-bar-pct" id="dlBarPct">0%</span>
+      </div>
+      <div class="dl-bar-track">
+        <div class="dl-bar-fill" id="dlBarFill"></div>
+      </div>
+      <div class="dl-bar-sub" id="dlBarSub">One-time · cached after this · ~500 MB</div>
+    </div>
+  </div>
+
   <!-- Steady Night layer (hidden until 30s of verified silence) -->
   <div class="night" id="night" aria-hidden="true">
     <canvas class="night-sky" id="nightSky"></canvas>
@@ -145,6 +161,7 @@
       </div>
       <h2>Catch your ideas?</h2>
       <p class="lead">During this Infinity session, Silence will catch any stray ideas you say out loud and attach them to the log. Transcription happens on your device — no audio leaves your phone.</p>
+      <p class="vn-download-notice" id="vnDownloadNotice">First time: a ~500 MB speech model will download to your device. One-time — cached forever after that. Use Wi-Fi.</p>
       <button class="primary-btn" id="vnYesSession">Yes, this session</button>
       <button class="ghost-btn" id="vnAlwaysOn">Always on from now</button>
       <button class="ghost-btn" id="vnNotThisTime">Not this time</button>
