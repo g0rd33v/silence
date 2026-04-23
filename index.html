@@ -211,6 +211,24 @@
           </div>
         </div>
         <p class="settings-hint settings-hint-vn">Infinity mode only. On-device transcription — nothing leaves your phone.</p>
+
+        <!-- v1.1.1 Mumbles diagnostic panel — live readout of the STT pipeline -->
+        <details class="settings-debug" id="mumblesDebug">
+          <summary>Mumbles diagnostics</summary>
+          <div class="debug-grid">
+            <div class="debug-row"><span class="debug-k">State</span><span class="debug-v" id="dbgState">—</span></div>
+            <div class="debug-row"><span class="debug-k">Model load</span><span class="debug-v" id="dbgProgress">—</span></div>
+            <div class="debug-row"><span class="debug-k">Session active</span><span class="debug-v" id="dbgSession">—</span></div>
+            <div class="debug-row"><span class="debug-k">Audio tap</span><span class="debug-v" id="dbgTap">—</span></div>
+            <div class="debug-row"><span class="debug-k">AudioCtx</span><span class="debug-v" id="dbgCtx">—</span></div>
+            <div class="debug-row"><span class="debug-k">Input rate</span><span class="debug-v" id="dbgRate">—</span></div>
+            <div class="debug-row"><span class="debug-k">Buffer</span><span class="debug-v" id="dbgBuffer">—</span></div>
+            <div class="debug-row"><span class="debug-k">Chunks (sent / done / pending)</span><span class="debug-v" id="dbgChunks">—</span></div>
+            <div class="debug-row"><span class="debug-k">Last transcript</span><span class="debug-v" id="dbgLast">—</span></div>
+            <div class="debug-row"><span class="debug-k">Accumulated text</span><span class="debug-v" id="dbgAccum">—</span></div>
+            <div class="debug-row"><span class="debug-k">Error</span><span class="debug-v" id="dbgError">—</span></div>
+          </div>
+        </details>
       </div>
 
       <p class="log-signature">From <a href="https://beta.labs.vc" target="_blank" rel="noopener">Labs</a> with love</p>

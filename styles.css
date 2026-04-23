@@ -1332,3 +1332,63 @@ button:focus-visible {
 }
 
 /* ---- End voice notes ---- */
+
+/* ---- v1.1.1 Mumbles diagnostic panel ---- */
+.settings-debug {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: 10px;
+  background: rgba(255,255,255,0.02);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.settings-debug summary {
+  cursor: pointer;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  color: var(--c-2);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  outline: none;
+  list-style: none;
+  padding: 2px 0;
+}
+.settings-debug summary::-webkit-details-marker { display: none; }
+.settings-debug summary::before {
+  content: '▸ ';
+  display: inline-block;
+  transition: transform .15s var(--ease);
+}
+.settings-debug[open] summary::before {
+  transform: rotate(90deg);
+}
+.debug-grid {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.debug-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 3px 0;
+  border-bottom: 1px dashed rgba(255,255,255,0.04);
+}
+.debug-row:last-child { border-bottom: none; }
+.debug-k {
+  color: var(--c-3);
+  flex-shrink: 0;
+}
+.debug-v {
+  color: var(--c-1);
+  text-align: right;
+  word-break: break-word;
+  max-width: 60%;
+}
+.debug-v.ok    { color: #4ade80; }
+.debug-v.warn  { color: #fbbf24; }
+.debug-v.err   { color: #f87171; }
+.debug-v.muted { color: var(--c-3); }

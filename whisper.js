@@ -180,6 +180,7 @@ const whisper = {
     if (msg.type === 'result') {
       this.pending = Math.max(0, this.pending - 1);
       const text = (msg.text || '').trim();
+      this.lastResult = text;
       if (text.length >= CONFIG.STT_MIN_CHARS && this._onText) {
         this._onText(text);
       }
@@ -199,4 +200,29 @@ const whisper = {
       error: this.loadError,
     });
   },
+
+  // v1.1.1: debug stats for the Mumbles diagnostic panel.
+  getStats() {
+    let stateName = 'idle';
+    if (this.unsupported) stateName = 'unsupported';
+    else if (this.loading) stateName = 'loading';
+    else if (this.ready)   stateName = 'ready';
+    const sr = (typeof CONFIG !== 'undefined' && CONFIG.STT_SAMPLE_RATE) || 16000;
+    return {
+      state: stateName,
+      progress: this.loadProgress,
+      error: this.loadError,
+      bufferSamples: this.bufferLen,
+      bufferSeconds: this.bufferLen / sr,
+      chunksSent: this.chunkId,
+      chunksPending: this.pending,
+      chunksDone: Math.max(0, this.chunkId - this.pending),
+      inputSampleRate: this.inputSampleRate,
+      sessionActive: this.dispatchTimer != null,
+    };
+  },
+
+  // Last transcript text seen (set externally by app.js to avoid
+  // duplicating the join logic). Only used by the debug panel.
+  lastResult: '',
 };
