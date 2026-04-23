@@ -40,8 +40,13 @@
 // 1. Config
 // ============================================================
 const CONFIG = {
-  MOTION_THRESHOLD:       0.6,
-  MOTION_GRACE_MS:        800,
+  // Motion sensitivity. Phones report acceleration including gravity.
+  // A still phone reports the gravity vector (~9.8 m/s²) consistently;
+  // delta-of-frame is what we actually measure. v1.0 used 0.6 which
+  // missed gentle pickups; 0.35 catches them while ignoring keyboard
+  // typing on a desk.
+  MOTION_THRESHOLD:       0.35,
+  MOTION_GRACE_MS:        500,
   FOCUS_GRACE_MS:         500,     // tab can be blipped briefly
   PAUSE_TIMEOUT_MS:       3 * 60 * 1000, // 3 min -> auto-end
 
@@ -152,19 +157,26 @@ const haptics = {
     const tg = this._tg();
     if (tg) {
       try {
+        // v1.1: bumped intensity. Telegram's haptics on iOS read
+        // very subtle through Taptic Engine — selectionChanged is
+        // almost imperceptible. Route everything one level stronger.
         if (kind === 'success')      tg.notificationOccurred('success');
-        else if (kind === 'tap')     tg.selectionChanged();
-        else if (kind === 'short')   tg.impactOccurred('light');
-        else if (kind === 'medium')  tg.impactOccurred('medium');
+        else if (kind === 'warning') tg.notificationOccurred('warning');
+        else if (kind === 'tap')     tg.impactOccurred('medium');
+        else if (kind === 'short')   tg.impactOccurred('medium');
+        else if (kind === 'medium')  tg.impactOccurred('heavy');
+        else if (kind === 'heavy')   tg.impactOccurred('heavy');
       } catch (_) {}
       return;
     }
     if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
       const pattern =
         kind === 'success' ? [40, 80, 40] :
-        kind === 'tap'     ? 15 :
-        kind === 'short'   ? 20 :
-        kind === 'medium'  ? 40 : 0;
+        kind === 'warning' ? [60, 40, 60] :
+        kind === 'tap'     ? 25 :
+        kind === 'short'   ? 35 :
+        kind === 'medium'  ? 60 :
+        kind === 'heavy'   ? 90 : 0;
       try { navigator.vibrate(pattern); } catch (_) {}
     }
   },
@@ -172,7 +184,9 @@ const haptics = {
   tap()       { this.fire('tap'); },
   short()     { this.fire('short'); },
   medium()    { this.fire('medium'); },
+  heavy()     { this.fire('heavy'); },
   success()   { this.fire('success'); },
+  warning()   { this.fire('warning'); },
 };
 
 // ============================================================
@@ -1082,6 +1096,14 @@ async function startMic() {
 function attachSttTap() {
   if (!state.audioCtx || !state.micSourceNode) return;
   if (state.sttProcessor) return;
+  // iOS Safari quirk: AudioContext starts 'suspended' and ScriptProcessor's
+  // onaudioprocess never fires while suspended. The AnalyserNode keeps
+  // working (different code path), so v0.9 never noticed — but STT will
+  // silently capture nothing. We resume() here; the call originated from
+  // a user gesture (click on START), so iOS allows it.
+  if (state.audioCtx.state === 'suspended') {
+    state.audioCtx.resume().catch(() => {});
+  }
   // 4096 = ~85ms @ 48kHz. Small enough to be responsive, large
   // enough to keep callback overhead low.
   const proc = state.audioCtx.createScriptProcessor(4096, 1, 1);
@@ -1256,7 +1278,10 @@ function enterPause(reason) {
 
   setRunningUI(true, true);
   audio.playZoomOut();
-  haptics.short();
+  // v1.1: pause is the most important haptic — fire both an impact
+  // and a warning notification so it's actually felt in Telegram.
+  haptics.medium();
+  haptics.warning();
 
   state.pauseTimeoutId = setTimeout(() => {
     if (state.paused && state.running) {
@@ -1352,10 +1377,10 @@ function updateSttStatus(s) {
   if (s.state === 'loading') {
     const pct = Math.round((s.progress || 0) * 100);
     dom.statusText.textContent = pct > 0
-      ? `Loading voice notes… ${pct}%`
-      : 'Loading voice notes…';
+      ? `Loading mumbles… ${pct}%`
+      : 'Loading mumbles…';
   } else if (s.state === 'unsupported') {
-    dom.statusText.textContent = 'Voice notes unsupported on this device';
+    dom.statusText.textContent = 'Mumbles unsupported on this device';
   } else if (s.state === 'ready') {
     dom.statusText.textContent = 'Listening for silence…';
   }
@@ -1515,7 +1540,7 @@ async function startSession() {
   dom.dial.classList.add('starting');
   setTimeout(() => dom.dial.classList.remove('starting'), 2600);
   audio.playStart();
-  haptics.medium();
+  haptics.heavy();
 
   setRunningUI(true);
   state.sensingFrame = requestAnimationFrame(sensingTick);
@@ -1783,7 +1808,7 @@ async function renderLog() {
     let vnBadge = '';
     let vnPanel = '';
     if (s.voiceNotes && s.id != null) {
-      vnBadge = `<button type="button" class="log-vn-badge" data-vn-toggle="${s.id}" aria-expanded="false" aria-controls="vn-panel-${s.id}">${NOTEBOOK_SVG_INLINE}<span>Notes</span></button>`;
+      vnBadge = `<button type="button" class="log-vn-badge" data-vn-toggle="${s.id}" aria-expanded="false" aria-controls="vn-panel-${s.id}">${NOTEBOOK_SVG_INLINE}<span>Mumbles</span></button>`;
       vnPanel = `
         <div class="log-vn-panel" id="vn-panel-${s.id}" data-vn-panel="${s.id}" hidden>
           <p class="log-vn-text">${escapeHTML(s.voiceNotes)}</p>
