@@ -52,10 +52,17 @@ async function loadPipeline() {
   loading = true;
 
   try {
+    // Real WebGPU detection — check that an adapter is actually available.
+    // 'gpu' in navigator is true on browsers that ship the API even when
+    // no adapter exists (older GPU, blocked by enterprise policy, etc.),
+    // which makes pipeline() fail with a confusing error after the model
+    // has already started downloading. Asking for an adapter first lets us
+    // route to WASM cleanly with a single download pass.
     let device = 'wasm';
     try {
-      if (typeof navigator !== 'undefined' && 'gpu' in navigator) {
-        device = 'webgpu';
+      if (typeof navigator !== 'undefined' && navigator.gpu) {
+        const adapter = await navigator.gpu.requestAdapter();
+        if (adapter) device = 'webgpu';
       }
     } catch (_) {}
 
