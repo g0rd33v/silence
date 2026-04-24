@@ -1,7 +1,9 @@
 /* Silence · service worker
-   Minimal offline cache — app is tiny. */
+   Minimal offline cache — app is tiny.
+   v1.3.0 — surfaces per-asset install failures to the page
+            via postMessage so Diagnostics can show them. */
 
-const CACHE = 'silence-v1-2-2';
+const CACHE = 'silence-v1-3-0';
 
 const ASSETS = [
   './',
@@ -17,9 +19,21 @@ const ASSETS = [
 ];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(
-    caches.open(CACHE).then((cache) => cache.addAll(ASSETS)).catch(() => {})
-  );
+  e.waitUntil((async () => {
+    const cache = await caches.open(CACHE);
+    const results = await Promise.all(ASSETS.map(async (url) => {
+      try { await cache.add(url); return { url, ok: true }; }
+      catch (err) { return { url, ok: false, error: String(err && err.message || err) }; }
+    }));
+    const failed = results.filter(r => !r.ok);
+    if (failed.length > 0) {
+      self.__cacheInstallErrors = failed;
+      try {
+        const clients = await self.clients.matchAll({ includeUncontrolled: true });
+        clients.forEach(c => c.postMessage({ type: 'sw-install-errors', errors: failed }));
+      } catch (_) {}
+    }
+  })());
   self.skipWaiting();
 });
 
@@ -35,7 +49,6 @@ self.addEventListener('activate', (e) => {
 self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET') return;
-
   e.respondWith(
     caches.match(req).then((cached) =>
       cached ||

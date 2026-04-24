@@ -1601,3 +1601,44 @@ button:focus-visible {
 .model-status.installed .model-dl-btn {
   display: none;
 }
+
+/* ============================================================ */
+/* v1.3 — Diagnostics panel                                     */
+/* ============================================================ */
+.diag-wrap { display: flex; flex-direction: column; gap: 12px; padding: 10px 0 4px 0; }
+.diag-meter-wrap { display: flex; flex-direction: column; gap: 6px; }
+.diag-meter-label {
+  font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--c-4, #6a6a6a); font-weight: 600;
+}
+.diag-meter {
+  position: relative; height: 6px; border-radius: 3px;
+  background: rgba(255,255,255,0.05);
+  overflow: hidden;
+}
+.diag-meter-fill {
+  position: absolute; left: 0; top: 0; bottom: 0;
+  width: 0%;
+  background: linear-gradient(90deg, #3da06a, #c5b64a 70%, #d26b3a);
+  transition: width 120ms linear;
+}
+.diag-meter-fill.motion { background: linear-gradient(90deg, #3da06a, #d26b3a); }
+.diag-meter-fill.motion.over { background: #d26b3a; }
+.diag-actions {
+  display: flex; flex-wrap: wrap; gap: 6px; padding-top: 4px;
+}
+.diag-actions .settings-chip { font-size: 11.5px; padding: 5px 10px; }
+.diag-selftest { display: flex; flex-direction: column; gap: 3px; padding-top: 4px; }
+.diag-test-row {
+  display: flex; justify-content: space-between; gap: 10px;
+  font-size: 11.5px; font-family: ui-monospace, Menlo, monospace;
+  padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.diag-test-row.ok .diag-test-name { color: #7ac98f; }
+.diag-test-row.err .diag-test-name { color: #e07c5a; }
+.diag-test-detail { color: var(--c-4, #6a6a6a); text-align: right; }
+.cl-dropped {
+  font-size: 11px; color: var(--c-4, #6a6a6a);
+  padding: 4px 0 8px 0; border-bottom: 1px dashed rgba(255,255,255,0.08);
+  margin-bottom: 8px;
+}
