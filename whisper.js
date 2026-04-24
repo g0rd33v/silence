@@ -92,7 +92,7 @@ const whisper = {
       return false;
     }
     try {
-      this.worker = new Worker('./whisper-worker.js', { type: 'module' });
+      this.worker = new Worker('./whisper-worker.js?v=1.4.0', { type: 'module' });
       this._workerBootTs = Date.now();
       this.worker.addEventListener('message', (e) => this._onMessage(e.data));
       this.worker.addEventListener('error', (e) => {

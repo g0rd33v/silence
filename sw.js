@@ -3,7 +3,7 @@
    v1.3.0 — surfaces per-asset install failures to the page
             via postMessage so Diagnostics can show them. */
 
-const CACHE = 'silence-v1-4-0';
+const CACHE = 'silence-v1-4-1';
 
 const ASSETS = [
   './',
@@ -11,7 +11,7 @@ const ASSETS = [
   './styles.css',
   './whisper.js',
   './app.js',
-  './whisper-worker.js',
+  './whisper-worker.js?v=1.4.0',
   './manifest.webmanifest',
   './icons/icon.svg',
   './icons/icon-192.png',
