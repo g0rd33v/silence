@@ -433,3 +433,6 @@ Object.defineProperty(whisper, 'lastResult', {
   get() { return this._lastResult; },
   set(v) { this._lastResult = v || ''; },
 });
+
+// Expose as window property for legacy scripts that check window.whisper.
+window.whisper = whisper;
