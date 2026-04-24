@@ -136,7 +136,7 @@ const CONFIG = {
   // is throttled (hidden tab, dimmed screen).
   LOOP_BACKSTOP_MS: 500,
 };
-const APP_VERSION = 'v1.3.0';
+const APP_VERSION = 'v1.4.0';
 const BUILD_TS = new Date().toISOString();
 
 /* ============================================================ */
@@ -1865,6 +1865,11 @@ const Diag = {
           <button type="button" class="settings-chip" id="diagRequestPermsBtn">Re-request permissions</button>
           <button type="button" class="settings-chip" id="diagSelfTestBtn">Run self-test</button>
           <button type="button" class="settings-chip" id="diagCopyBtn">Copy all as JSON</button>
+                  <button type="button" class="settings-chip" id="diagAiReloadBtn">Reload STT worker</button>
+          <button type="button" class="settings-chip" id="diagAiProbeBtn">Probe WebGPU</button>
+          <button type="button" class="settings-chip" id="diagAiForceWasmBtn">Force WASM</button>
+          <button type="button" class="settings-chip" id="diagAiForceGpuBtn">Force WebGPU</button>
+          <button type="button" class="settings-chip" id="diagAiAutoBtn">Auto backend</button>
         </div>
         <div class="diag-selftest" id="diagSelfTest"></div>
       </div>
@@ -1878,6 +1883,11 @@ const Diag = {
     dom.diagSelfTestBtn = det.querySelector('#diagSelfTestBtn');
     dom.diagRequestPermsBtn = det.querySelector('#diagRequestPermsBtn');
     dom.diagRefreshBtn = det.querySelector('#diagRefreshBtn');
+    dom.diagAiReloadBtn = det.querySelector('#diagAiReloadBtn');
+    dom.diagAiProbeBtn = det.querySelector('#diagAiProbeBtn');
+    dom.diagAiForceWasmBtn = det.querySelector('#diagAiForceWasmBtn');
+    dom.diagAiForceGpuBtn = det.querySelector('#diagAiForceGpuBtn');
+    dom.diagAiAutoBtn = det.querySelector('#diagAiAutoBtn');
     this._wireButtons(det);
     this.refreshStatic();
   },
@@ -1920,6 +1930,17 @@ const Diag = {
       haptics.tap();
       this.runSelfTest();
     });
+  
+    const onReload = () => { haptics.tap(); if (window.whisper && whisper.reloadWorker) { whisper.reloadWorker(); } renderDiagnostics(); };
+    const onProbe  = () => { haptics.tap(); if (window.whisper && whisper.probeGpu) whisper.probeGpu(); setTimeout(renderDiagnostics, 250); };
+    const onWasm   = () => { haptics.tap(); if (window.whisper && whisper.forceBackend) { whisper.forceBackend("wasm"); whisper.reloadWorker && whisper.reloadWorker(); } renderDiagnostics(); };
+    const onGpu    = () => { haptics.tap(); if (window.whisper && whisper.forceBackend) { whisper.forceBackend("webgpu"); whisper.reloadWorker && whisper.reloadWorker(); } renderDiagnostics(); };
+    const onAuto   = () => { haptics.tap(); if (window.whisper && whisper.forceBackend) { whisper.forceBackend(null); whisper.reloadWorker && whisper.reloadWorker(); } renderDiagnostics(); };
+    dom.diagAiReloadBtn && dom.diagAiReloadBtn.addEventListener("click", onReload);
+    dom.diagAiProbeBtn && dom.diagAiProbeBtn.addEventListener("click", onProbe);
+    dom.diagAiForceWasmBtn && dom.diagAiForceWasmBtn.addEventListener("click", onWasm);
+    dom.diagAiForceGpuBtn && dom.diagAiForceGpuBtn.addEventListener("click", onGpu);
+    dom.diagAiAutoBtn && dom.diagAiAutoBtn.addEventListener("click", onAuto);
   },
 
   async snapshot() {
@@ -2054,6 +2075,45 @@ const Diag = {
       log('localStorage', ok, ok ? 'read/write ok' : 'mismatch');
     } catch (e) { log('localStorage', false, e.message); }
 
+    // 9. WebGPU adapter probe
+    try {
+      if (typeof navigator !== "undefined" && navigator.gpu) {
+        const ad = await navigator.gpu.requestAdapter();
+        if (ad) {
+          let label = "";
+          try {
+            const info = ad.requestAdapterInfo ? await ad.requestAdapterInfo() : {};
+            label = [info.vendor, info.architecture, info.device].filter(Boolean).join(" / ") || "(unnamed adapter)";
+          } catch (_) { label = "(info unavailable)"; }
+          log("WebGPU adapter", true, label);
+        } else log("WebGPU adapter", false, "requestAdapter() returned null");
+      } else log("WebGPU adapter", false, "navigator.gpu unavailable");
+    } catch (e) { log("WebGPU adapter", false, e.message); }
+    // 10. Whisper worker ping (round-trip)
+    try {
+      if (window.whisper && typeof whisper.ping === "function") {
+        whisper.ensureWorker && whisper.ensureWorker();
+        const p = await whisper.ping(3000);
+        if (p) log("Whisper worker ping", true, "rtt=" + p.rttMs + " ms, backend=" + (p.backend || "(not yet chosen)") + ", uptime=" + Math.round((p.uptimeMs || 0) / 1000) + "s");
+        else log("Whisper worker ping", false, "no pong within 3s");
+      } else log("Whisper worker ping", false, "whisper.ping unavailable");
+    } catch (e) { log("Whisper worker ping", false, e.message); }
+    // 11. Whisper pipeline state
+    try {
+      if (window.whisper && typeof whisper.getStats === "function") {
+        const s = whisper.getStats();
+        const ok = s.state === "ready" || s.state === "idle" || s.state === "loading";
+        log("Whisper pipeline", ok, "state=" + s.state + (s.backend ? ", backend=" + s.backend : "") + (s.error ? ", err=" + s.error : ""));
+      } else log("Whisper pipeline", false, "whisper global missing");
+    } catch (e) { log("Whisper pipeline", false, e.message); }
+    // 12. IndexedDB for transformers.js model cache (Cache API)
+    try {
+      if ("caches" in window) {
+        const names = await caches.keys();
+        const tj = names.filter(n => /transformers|huggingface|xenova/i.test(n));
+        log("Model cache", names.length > 0, "caches=" + names.length + (tj.length ? ", hf-cache=" + tj.join(",") : ""));
+      } else log("Model cache", false, "Cache API unavailable");
+    } catch (e) { log("Model cache", false, e.message); }
     this._lastSelfTest = { ts: Date.now(), results };
     if (panel) {
       panel.innerHTML = results.map(r =>
@@ -2140,6 +2200,55 @@ function renderDiagnostics() {
   row('Interruptions', String(state.interruptionCount), state.interruptionCount > 0 ? 'warn' : 'muted');
   row('Night mode', state.night ? 'on' : 'off', 'muted');
 
+
+  /* --- AI / STT (Whisper + WebGPU) ------------------------------ */
+  try {
+    const stt = (window.whisper && typeof whisper.getDiag === "function") ? whisper.getDiag() : null;
+    if (!stt) {
+      row("Whisper", "not loaded", "muted");
+    } else {
+      const s = stt.state || {};
+      const okMap = { ready: "ok", loading: "warn", idle: "muted", unsupported: "err" };
+      row("Whisper state", s.state, okMap[s.state] || "muted");
+      row("Whisper backend", s.backend || "(unchosen)", s.backend === "webgpu" ? "ok" : s.backend === "wasm" ? "warn" : "muted");
+      row("Whisper model", s.model || "—", "muted");
+      if (s.state === "loading") {
+        const pct = Math.round((s.progress || 0) * 100);
+        const mb = stt.bytesTotal ? (stt.bytesLoaded / 1048576).toFixed(1) + " / " + (stt.bytesTotal / 1048576).toFixed(1) + " MB" : "";
+        row("Whisper progress", pct + "%" + (mb ? " (" + mb + ")" : ""), "warn");
+      }
+      row("Whisper forced backend", stt.forceBackend || "auto", "muted");
+      row("Whisper session", s.sessionActive ? "armed" : "idle", s.sessionActive ? "ok" : "muted");
+      row("Whisper in-flight", s.inFlight ? "yes (chunk " + s.pending + ")" : "no", s.inFlight ? "warn" : "muted");
+      row("Whisper chunks done", String(s.chunksDone), s.chunksDone > 0 ? "ok" : "muted");
+      row("Whisper chunk errors", String(s.chunksErr), s.chunksErr > 0 ? "err" : "muted");
+      if (s.lastChunkMs != null) row("Whisper last chunk", s.lastChunkMs + " ms", s.lastChunkMs > 20000 ? "warn" : "ok");
+      row("Whisper buffer", s.bufferLen + " / " + s.bufferCap + " samples", s.bufferLen > 0 ? "ok" : "muted");
+      row("Whisper device-lost count", String(s.deviceLostCount || 0), (s.deviceLostCount || 0) > 0 ? "err" : "muted");
+      if (s.lastError) row("Whisper last error", s.lastError.where + ": " + (s.lastError.error || ""), "err");
+      // WebGPU adapter
+      const gpu = stt.gpu;
+      if (gpu) {
+        row("WebGPU API", gpu.hasApi ? "yes" : "no", gpu.hasApi ? "ok" : "warn");
+        row("WebGPU adapter", gpu.adapter ? "yes" : "no", gpu.adapter ? "ok" : "warn");
+        if (gpu.adapterInfo) {
+          const ai = gpu.adapterInfo;
+          const label = [ai.vendor, ai.architecture, ai.device, ai.description].filter(Boolean).join(" / ") || "(unnamed)";
+          row("GPU adapter info", label, "muted");
+        }
+        if (gpu.limits && gpu.limits.maxBufferSize) {
+          row("GPU max buffer", (gpu.limits.maxBufferSize / 1048576).toFixed(0) + " MiB", "muted");
+        }
+        if (gpu.error) row("WebGPU error", gpu.error, "err");
+      } else {
+        row("WebGPU probe", "pending", "muted");
+      }
+      // transformers.js info (if we have a diag event for it)
+      if (stt.lastDiag && stt.lastDiag.kind === "transformers-loaded") {
+        row("transformers.js", stt.lastDiag.version + " (loaded in " + stt.lastDiag.ms + " ms)", "ok");
+      }
+    }
+  } catch (e) { row("Whisper diag", "panel error: " + e.message, "err"); }
   dom.diagGrid.innerHTML = rows.join('');
 }
 

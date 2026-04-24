@@ -3,7 +3,7 @@
    v1.3.0 — surfaces per-asset install failures to the page
             via postMessage so Diagnostics can show them. */
 
-const CACHE = 'silence-v1-3-0';
+const CACHE = 'silence-v1-4-0';
 
 const ASSETS = [
   './',
